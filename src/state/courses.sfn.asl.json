@@ -1,0 +1,71 @@
+{
+  "Comment": "Course build orchestrator",
+  "StartAt": "GenerateOutline",
+  "States": {
+    "GenerateOutline": {
+      "Type": "Task",
+      "Resource": "${GenerateOutlineArn}",
+      "ResultPath": "$.outline",
+      "Next": "PersistCourse"
+    },
+    "PersistCourse": {
+      "Type": "Task",
+      "Resource": "${PersistCourseArn}",
+      "ResultPath": "$.persistCourse",
+      "Next": "GenerateLessons"
+    },
+    "GenerateLessons": {
+      "Type": "Task",
+      "Resource": "${GenerateLessonsArn}",
+      "ResultPath": "$.lessons",
+      "Next": "PersistLessons"
+    },
+    "PersistLessons": {
+      "Type": "Task",
+      "Resource": "${PersistLessonsArn}",
+      "ResultPath": "$.persistLessons",
+      "Next": "GenerateQuizzes"
+    },
+    "GenerateQuizzes": {
+      "Type": "Task",
+      "Resource": "${GenerateQuizzesArn}",
+      "ResultPath": "$.quizzes",
+      "Next": "PersistQuizzes"
+    },
+    "PersistQuizzes": {
+      "Type": "Task",
+      "Resource": "${PersistQuizzesArn}",
+      "ResultPath": "$.persistQuizzes",
+      "Next": "GenerateExam"
+    },
+    "GenerateExam": {
+      "Type": "Task",
+      "Resource": "${GenerateExamArn}",
+      "ResultPath": "$.exam",
+      "Next": "PersistExam"
+    },
+    "PersistExam": {
+      "Type": "Task",
+      "Resource": "${PersistExamArn}",
+      "ResultPath": "$.persistExam",
+      "Next": "GenerateResources"
+    },
+    "GenerateResources": {
+      "Type": "Task",
+      "Resource": "${GenerateResourcesArn}",
+      "ResultPath": "$.resources",
+      "Next": "PersistResources"
+    },
+    "PersistResources": {
+      "Type": "Task",
+      "Resource": "${PersistResourcesArn}",
+      "ResultPath": "$.persistResources",
+      "Next": "EmitBuiltEvent"
+    },
+    "EmitBuiltEvent": {
+      "Type": "Task",
+      "Resource": "${EmitBuiltEventArn}",
+      "End": true
+    }
+  }
+}
