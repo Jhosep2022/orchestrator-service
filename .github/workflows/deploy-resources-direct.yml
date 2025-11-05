@@ -37,12 +37,12 @@ jobs:
       AWS_REGION: us-east-1
       NODE_VERSION: 20.x
       SLS_VERSION: 4.21.1
+      SERVICE_DIR: .   # <- cambia a 'orchestrator-service' si algún día lo mueves
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Calcula STAGE (y lo imprime). Úsalo en el resto de steps.
       - name: Resolve STAGE
         id: stage
         shell: bash
@@ -52,22 +52,49 @@ jobs:
           else
             STAGE=$([ "${{ github.ref }}" = "refs/heads/main" ] && echo "dev" || echo "qa")
           fi
-          echo "STAGE=$STAGE" | tee -a $GITHUB_OUTPUT
+          echo "STAGE=$STAGE" >> $GITHUB_OUTPUT
           echo "Resolved STAGE=$STAGE"
 
-      - name: Setup Node
+      # Activa cache SOLO si existe lockfile
+      - name: Detect lockfile
+        id: lock
+        shell: bash
+        working-directory: ${{ env.SERVICE_DIR }}
+        run: |
+          if [ -f package-lock.json ]; then
+            echo "has_lock=true"  >> $GITHUB_OUTPUT
+            echo "lock_path=package-lock.json" >> $GITHUB_OUTPUT
+          elif [ -f npm-shrinkwrap.json ]; then
+            echo "has_lock=true"  >> $GITHUB_OUTPUT
+            echo "lock_path=npm-shrinkwrap.json" >> $GITHUB_OUTPUT
+          elif [ -f yarn.lock ]; then
+            echo "has_lock=true"  >> $GITHUB_OUTPUT
+            echo "lock_path=yarn.lock" >> $GITHUB_OUTPUT
+          else
+            echo "has_lock=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Setup Node (with/without cache)
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: npm
+          cache: ${{ steps.lock.outputs.has_lock == 'true' && 'npm' || 'none' }}
+          cache-dependency-path: ${{ steps.lock.outputs.has_lock == 'true' && format('{0}/{1}', env.SERVICE_DIR, steps.lock.outputs.lock_path) || '' }}
 
       - name: Print Node versions (debug)
+        working-directory: ${{ env.SERVICE_DIR }}
         run: |
           node -v
           npm -v
 
-      - name: Install deps (prod only)
-        run: npm ci --omit=dev
+      - name: Install deps
+        working-directory: ${{ env.SERVICE_DIR }}
+        run: |
+          if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
+            npm ci --omit=dev
+          else
+            npm i --omit=dev --no-audit --no-fund
+          fi
 
       - name: Detect changes
         id: changes
@@ -75,11 +102,11 @@ jobs:
         with:
           filters: |
             infra:
-              - 'serverless.yml'
-              - 'src/state/**'
+              - '${{ env.SERVICE_DIR }}/serverless.yml'
+              - '${{ env.SERVICE_DIR }}/src/state/**'
             code:
-              - 'src/**'
-              - '!src/state/**'
+              - '${{ env.SERVICE_DIR }}/src/**'
+              - '!${{ env.SERVICE_DIR }}/src/state/**'
 
       - name: Configure AWS
         uses: aws-actions/configure-aws-credentials@v4
@@ -101,9 +128,10 @@ jobs:
           echo "GEMINI_MODEL_ID=${{ secrets.GEMINI_MODEL_ID }}"         >> $GITHUB_OUTPUT
           echo "GOOGLE_API_KEY=${{ secrets.GOOGLE_API_KEY }}"           >> $GITHUB_OUTPUT
 
-      # ───────────── DEPLOY COMPLETO (infra cambiada) ─────────────
+      # ───────── DEPLOY COMPLETO (infra cambiada) ─────────
       - name: Deploy with Serverless (infra changed)
         if: steps.changes.outputs.infra == 'true'
+        working-directory: ${{ env.SERVICE_DIR }}
         env:
           LLM_PROVIDER:          ${{ steps.envs.outputs.LLM_PROVIDER }}
           GEMINI_MODEL_ID:       ${{ steps.envs.outputs.GEMINI_MODEL_ID }}
@@ -117,13 +145,15 @@ jobs:
             --stage ${{ steps.stage.outputs.STAGE }} \
             --region ${{ env.AWS_REGION }}
 
-      # ───────────── DEPLOY RÁPIDO (solo código) ─────────────
+      # ───────── DEPLOY RÁPIDO (solo código) ─────────
       - name: Package ZIP (code-only)
         if: steps.changes.outputs.infra != 'true'
+        working-directory: ${{ env.SERVICE_DIR }}
         shell: bash
         run: |
           ZIP="orchestrator-src.zip"
-          zip -r "$ZIP" src/ node_modules/ package.json package-lock.json > /dev/null
+          zip -r "$ZIP" src/ node_modules/ package.json package-lock.json 2>/dev/null || \
+          zip -r "$ZIP" src/ node_modules/ package.json
           echo "ZIP_FILE=$ZIP" >> $GITHUB_ENV
 
       - name: Update function configuration (env)
@@ -148,6 +178,7 @@ jobs:
             --publish
 
       - name: Stack info (best effort)
+        working-directory: ${{ env.SERVICE_DIR }}
         run: |
           npx serverless@${{ env.SLS_VERSION }} info \
             --stage ${{ steps.stage.outputs.STAGE }} \
