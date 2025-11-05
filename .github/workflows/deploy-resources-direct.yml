@@ -1,0 +1,153 @@
+name: Deploy orchestrator Lambdas (smart)
+
+on:
+  push:
+    branches: [ main, qa ]
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: "Stage (dev|qa|prod)"
+        required: false
+        default: ""
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    # main -> dev, qa -> qa
+    environment: ${{ github.event_name == 'workflow_dispatch'
+        && (inputs.stage == '' && (github.ref == 'refs/heads/main' && 'dev' || 'qa') || inputs.stage)
+        || (github.ref == 'refs/heads/main' && 'dev' || 'qa') }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        fn:
+          - generateOutline
+          - persistCourse
+          - generateLessons
+          - persistLessons
+          - generateQuizzes
+          - persistQuizzes
+          - generateExam
+          - persistExam
+          - generateResources
+          - persistResources
+          - emitBuiltEvent
+
+    env:
+      AWS_REGION: us-east-1
+      NODE_VERSION: '20'
+      SLS_VERSION: '4.21.1'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install deps (prod only)
+        run: npm ci --omit=dev
+
+      # Detectar cambios: si tocas infra (ASL / serverless.yml) => despliegue completo
+      - name: Detect changes
+        id: changes
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            infra:
+              - 'serverless.yml'
+              - 'src/state/**'
+            code:
+              - 'src/**'
+              - '!src/state/**'
+
+      # Credenciales AWS (secrets por Environment)
+      - name: Configure AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ env.AWS_REGION }}
+
+      # Resolver stage y exportar todos los ENV desde secrets del Environment activo (dev/qa)
+      - name: Resolve ENV (from environment secrets)
+        id: envs
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Stage por dispatch o por rama
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.stage }}" ]; then
+            STAGE="${{ inputs.stage }}"
+          else
+            STAGE="${{ github.ref == 'refs/heads/main' && 'dev' || 'qa' }}"
+          fi
+
+          echo "STAGE=$STAGE" >> $GITHUB_OUTPUT
+
+          # Todos estos deben existir como Secrets del Environment (dev/qa)
+          echo "COURSES_TABLE=${{ secrets.COURSES_TABLE_NAME }}"        >> $GITHUB_OUTPUT
+          echo "RESOURCES_TABLE=${{ secrets.RESOURCES_TABLE_NAME }}"    >> $GITHUB_OUTPUT
+          echo "EVENT_BUS_NAME=${{ secrets.EVENT_BUS_NAME }}"           >> $GITHUB_OUTPUT
+          echo "ALLOWED_ORIGINS=${{ secrets.ALLOWED_ORIGINS }}"         >> $GITHUB_OUTPUT
+          echo "LLM_PROVIDER=${{ secrets.LLM_PROVIDER }}"               >> $GITHUB_OUTPUT
+          echo "GEMINI_MODEL_ID=${{ secrets.GEMINI_MODEL_ID }}"         >> $GITHUB_OUTPUT
+          echo "GOOGLE_API_KEY=${{ secrets.GOOGLE_API_KEY }}"           >> $GITHUB_OUTPUT
+
+      # ───────────── DEPLOY COMPLETO (infra cambiada) ─────────────
+      - name: Deploy with Serverless (infra changed)
+        if: steps.changes.outputs.infra == 'true'
+        env:
+          LLM_PROVIDER:          ${{ steps.envs.outputs.LLM_PROVIDER }}
+          GEMINI_MODEL_ID:       ${{ steps.envs.outputs.GEMINI_MODEL_ID }}
+          GOOGLE_API_KEY:        ${{ steps.envs.outputs.GOOGLE_API_KEY }}
+          COURSES_TABLE_NAME:    ${{ steps.envs.outputs.COURSES_TABLE }}
+          RESOURCES_TABLE_NAME:  ${{ steps.envs.outputs.RESOURCES_TABLE }}
+          EVENT_BUS_NAME:        ${{ steps.envs.outputs.EVENT_BUS_NAME }}
+          ALLOWED_ORIGINS:       ${{ steps.envs.outputs.ALLOWED_ORIGINS }}
+        run: |
+          npx serverless@${{ env.SLS_VERSION }} deploy \
+            --stage ${{ steps.envs.outputs.STAGE }} \
+            --region ${{ env.AWS_REGION }}
+
+      # ───────────── DEPLOY RÁPIDO (solo código) ─────────────
+      - name: Package ZIP (code-only)
+        if: steps.changes.outputs.infra != 'true'
+        shell: bash
+        run: |
+          ZIP="orchestrator-src.zip"
+          zip -r "$ZIP" src/ node_modules/ package.json package-lock.json > /dev/null
+          echo "ZIP_FILE=$ZIP" >> $GITHUB_ENV
+
+      - name: Update function configuration (env)
+        if: steps.changes.outputs.infra != 'true'
+        shell: bash
+        run: |
+          FN="${{ matrix.fn }}"
+          NAME="orchestrator-service-${{ steps.envs.outputs.STAGE }}-${FN}"
+
+          aws lambda update-function-configuration \
+            --function-name "$NAME" \
+            --environment "Variables={STAGE=${{ steps.envs.outputs.STAGE }},LLM_PROVIDER=${{ steps.envs.outputs.LLM_PROVIDER }},GEMINI_MODEL_ID=${{ steps.envs.outputs.GEMINI_MODEL_ID }},GOOGLE_API_KEY=${{ steps.envs.outputs.GOOGLE_API_KEY }},COURSES_TABLE_NAME=${{ steps.envs.outputs.COURSES_TABLE }},RESOURCES_TABLE_NAME=${{ steps.envs.outputs.RESOURCES_TABLE }},EVENT_BUS_NAME=${{ steps.envs.outputs.EVENT_BUS_NAME }},ALLOWED_ORIGINS=${{ steps.envs.outputs.ALLOWED_ORIGINS }}}"
+
+      - name: Update function code (matrix)
+        if: steps.changes.outputs.infra != 'true'
+        shell: bash
+        run: |
+          FN="${{ matrix.fn }}"
+          NAME="orchestrator-service-${{ steps.envs.outputs.STAGE }}-${FN}"
+          aws lambda update-function-code \
+            --function-name "$NAME" \
+            --zip-file "fileb://${{ env.ZIP_FILE }}" \
+            --publish
+
+      - name: Stack info (best effort)
+        run: |
+          npx serverless@${{ env.SLS_VERSION }} info \
+            --stage ${{ steps.envs.outputs.STAGE }} \
+            --region ${{ env.AWS_REGION }} || true

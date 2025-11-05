@@ -1,8 +1,8 @@
-// Como bloqueaste a Bedrock, exportamos directo.
+// Como ahora usamos Gemini, exportamos directo (mismas firmas).
 export {
   generateOutline,
   generateLessons,
   generateQuizzes,
   generateExam,
   generateResources
-} from './providers/bedrock.js';
+} from './providers/gemini.js';
