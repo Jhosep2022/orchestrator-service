@@ -10,14 +10,12 @@ on:
         required: false
         default: ""
 
+permissions:
+  contents: read
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
-
-    # main -> dev, qa -> qa
-    environment: ${{ github.event_name == 'workflow_dispatch'
-        && (inputs.stage == '' && (github.ref == 'refs/heads/main' && 'dev' || 'qa') || inputs.stage)
-        || (github.ref == 'refs/heads/main' && 'dev' || 'qa') }}
 
     strategy:
       fail-fast: false
@@ -37,12 +35,25 @@ jobs:
 
     env:
       AWS_REGION: us-east-1
-      NODE_VERSION: '20'
-      SLS_VERSION: '4.21.1'
+      NODE_VERSION: 20.x
+      SLS_VERSION: 4.21.1
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # Calcula STAGE (y lo imprime). Úsalo en el resto de steps.
+      - name: Resolve STAGE
+        id: stage
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.stage }}" ]; then
+            STAGE="${{ inputs.stage }}"
+          else
+            STAGE=$([ "${{ github.ref }}" = "refs/heads/main" ] && echo "dev" || echo "qa")
+          fi
+          echo "STAGE=$STAGE" | tee -a $GITHUB_OUTPUT
+          echo "Resolved STAGE=$STAGE"
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -50,10 +61,14 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
 
+      - name: Print Node versions (debug)
+        run: |
+          node -v
+          npm -v
+
       - name: Install deps (prod only)
         run: npm ci --omit=dev
 
-      # Detectar cambios: si tocas infra (ASL / serverless.yml) => despliegue completo
       - name: Detect changes
         id: changes
         uses: dorny/paths-filter@v3
@@ -66,7 +81,6 @@ jobs:
               - 'src/**'
               - '!src/state/**'
 
-      # Credenciales AWS (secrets por Environment)
       - name: Configure AWS
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -74,23 +88,11 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region:            ${{ env.AWS_REGION }}
 
-      # Resolver stage y exportar todos los ENV desde secrets del Environment activo (dev/qa)
       - name: Resolve ENV (from environment secrets)
         id: envs
         shell: bash
         run: |
           set -euo pipefail
-
-          # Stage por dispatch o por rama
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.stage }}" ]; then
-            STAGE="${{ inputs.stage }}"
-          else
-            STAGE="${{ github.ref == 'refs/heads/main' && 'dev' || 'qa' }}"
-          fi
-
-          echo "STAGE=$STAGE" >> $GITHUB_OUTPUT
-
-          # Todos estos deben existir como Secrets del Environment (dev/qa)
           echo "COURSES_TABLE=${{ secrets.COURSES_TABLE_NAME }}"        >> $GITHUB_OUTPUT
           echo "RESOURCES_TABLE=${{ secrets.RESOURCES_TABLE_NAME }}"    >> $GITHUB_OUTPUT
           echo "EVENT_BUS_NAME=${{ secrets.EVENT_BUS_NAME }}"           >> $GITHUB_OUTPUT
@@ -112,7 +114,7 @@ jobs:
           ALLOWED_ORIGINS:       ${{ steps.envs.outputs.ALLOWED_ORIGINS }}
         run: |
           npx serverless@${{ env.SLS_VERSION }} deploy \
-            --stage ${{ steps.envs.outputs.STAGE }} \
+            --stage ${{ steps.stage.outputs.STAGE }} \
             --region ${{ env.AWS_REGION }}
 
       # ───────────── DEPLOY RÁPIDO (solo código) ─────────────
@@ -129,18 +131,17 @@ jobs:
         shell: bash
         run: |
           FN="${{ matrix.fn }}"
-          NAME="orchestrator-service-${{ steps.envs.outputs.STAGE }}-${FN}"
-
+          NAME="orchestrator-service-${{ steps.stage.outputs.STAGE }}-${FN}"
           aws lambda update-function-configuration \
             --function-name "$NAME" \
-            --environment "Variables={STAGE=${{ steps.envs.outputs.STAGE }},LLM_PROVIDER=${{ steps.envs.outputs.LLM_PROVIDER }},GEMINI_MODEL_ID=${{ steps.envs.outputs.GEMINI_MODEL_ID }},GOOGLE_API_KEY=${{ steps.envs.outputs.GOOGLE_API_KEY }},COURSES_TABLE_NAME=${{ steps.envs.outputs.COURSES_TABLE }},RESOURCES_TABLE_NAME=${{ steps.envs.outputs.RESOURCES_TABLE }},EVENT_BUS_NAME=${{ steps.envs.outputs.EVENT_BUS_NAME }},ALLOWED_ORIGINS=${{ steps.envs.outputs.ALLOWED_ORIGINS }}}"
+            --environment "Variables={STAGE=${{ steps.stage.outputs.STAGE }},LLM_PROVIDER=${{ steps.envs.outputs.LLM_PROVIDER }},GEMINI_MODEL_ID=${{ steps.envs.outputs.GEMINI_MODEL_ID }},GOOGLE_API_KEY=${{ steps.envs.outputs.GOOGLE_API_KEY }},COURSES_TABLE_NAME=${{ steps.envs.outputs.COURSES_TABLE }},RESOURCES_TABLE_NAME=${{ steps.envs.outputs.RESOURCES_TABLE }},EVENT_BUS_NAME=${{ steps.envs.outputs.EVENT_BUS_NAME }},ALLOWED_ORIGINS=${{ steps.envs.outputs.ALLOWED_ORIGINS }}}"
 
       - name: Update function code (matrix)
         if: steps.changes.outputs.infra != 'true'
         shell: bash
         run: |
           FN="${{ matrix.fn }}"
-          NAME="orchestrator-service-${{ steps.envs.outputs.STAGE }}-${FN}"
+          NAME="orchestrator-service-${{ steps.stage.outputs.STAGE }}-${FN}"
           aws lambda update-function-code \
             --function-name "$NAME" \
             --zip-file "fileb://${{ env.ZIP_FILE }}" \
@@ -149,5 +150,5 @@ jobs:
       - name: Stack info (best effort)
         run: |
           npx serverless@${{ env.SLS_VERSION }} info \
-            --stage ${{ steps.envs.outputs.STAGE }} \
+            --stage ${{ steps.stage.outputs.STAGE }} \
             --region ${{ env.AWS_REGION }} || true
