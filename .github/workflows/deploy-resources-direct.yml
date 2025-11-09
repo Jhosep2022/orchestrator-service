@@ -28,6 +28,7 @@ jobs:
           - generateOutline
           - persistCourse
           - generateLessons
+          - persistModules
           - persistLessons
           - generateQuizzes
           - persistQuizzes
