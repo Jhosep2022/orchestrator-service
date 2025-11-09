@@ -120,7 +120,7 @@ jobs:
               MODULES_TABLE_NAME=${{ secrets.MODULES_TABLE_NAME }},
               LESSONS_TABLE_NAME=${{ secrets.LESSONS_TABLE_NAME }},
               QUIZZES_TABLE_NAME=${{ secrets.QUIZZES_TABLE_NAME }},
-              EXAMS_TABLE_NAME=${{ secrets.EXAMS_TABLE_NAME }}
+              EXAMS_TABLE_NAME=${{ secrets.EXAMS_TABLE_NAME }},
             }"
               
 
