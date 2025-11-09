@@ -7,7 +7,7 @@ export const env = {
 
   // Tablas / EventBridge / CORS (lo que ya usas)
   tableName: process.env.COURSES_TABLE_NAME,
-  resourcesTable: process.env.RESOURCES_TABLE_NAME,
+  resourcesTableName: process.env.RESOURCES_TABLE_NAME,
   eventBusName: process.env.EVENT_BUS_NAME || 'default',
   allowedOrigins: process.env.ALLOWED_ORIGINS || '*'
 };
