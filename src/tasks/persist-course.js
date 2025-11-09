@@ -1,4 +1,4 @@
-import { PutCommand } from '@aws-sdk/lib-dynamodb';
+import { UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { doc } from '../core/ddb.js';
 import { env } from '../core/env.js';
 
