@@ -1,51 +1,44 @@
-import { BatchWriteCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import { BatchWriteCommand } from '@aws-sdk/lib-dynamodb';
 import { doc } from '../core/ddb.js';
 import { env } from '../core/env.js';
 
 export const handler = async (event) => {
-  const { userId } = event;
   const courseId = event.outline.course.id;
-  const items = event.lessons.items;
+  const modules = event.outline.modules || [];
+  const lessons = event.lessons.items || [];
 
-  // Guardamos lecciones bajo la partición UC#user#course
-  const puts = items.map((l) => ({
-    PutRequest: {
-      Item: {
-        PK: `UC#${userId}#${courseId}`,
-        SK: `LESSON#${l.id}`,
-        etype: 'LESSON',
-        courseId,
-        moduleId: l.moduleId,
-        lessonId: l.id,
-        title: l.title,
-        durationMinutes: l.durationMinutes,
-        order: l.order,
-        contentMD: l.contentMD,
-        summary: l.summary
+  // Mapa móduloId -> posición (para GSI1SK)
+  const posByModule = new Map(modules.map((m, i) => [m.id, i + 1]));
+
+  const puts = lessons.map((l) => {
+    const mpos = posByModule.get(l.moduleId) || 0;
+    return {
+      PutRequest: {
+        Item: {
+          PK: `MODULE#${l.moduleId}`,
+          SK: `LESSON#${l.order}#${l.id}`,
+          etype: 'LESSON',
+          courseId,
+          moduleId: l.moduleId,
+          lessonId: l.id,
+          title: l.title,
+          durationMinutes: l.durationMinutes,
+          order: l.order,
+          contentMD: l.contentMD,
+          summary: l.summary,
+          // GSI por curso
+          GSI1PK: `COURSE#${courseId}`,
+          GSI1SK: `M#${mpos}#L#${l.order}#${l.id}`,
+        }
       }
-    }
-  }));
+    };
+  });
 
-  // Batch (en lotes de 25)
   for (let i = 0; i < puts.length; i += 25) {
-    const chunk = puts.slice(i, i + 25);
-    await doc.send(new BatchWriteCommand({ RequestItems: { [env.tableName]: chunk } }));
+    await doc.send(new BatchWriteCommand({
+      RequestItems: { [env.lessonsTable]: puts.slice(i, i + 25) }
+    }));
   }
 
-  // Actualiza totales en UC y ENROLLMENT
-  const total = items.length;
-  await doc.send(new UpdateCommand({
-    TableName: env.tableName,
-    Key: { PK: `UC#${userId}#${courseId}`, SK: 'COURSE#METADATA' },
-    UpdateExpression: 'SET totalLessons = :t',
-    ExpressionAttributeValues: { ':t': total }
-  }));
-  await doc.send(new UpdateCommand({
-    TableName: env.tableName,
-    Key: { PK: `USER#${userId}`, SK: `COURSE#${courseId}` },
-    UpdateExpression: 'SET totalLessons = :t',
-    ExpressionAttributeValues: { ':t': total }
-  }));
-
-  return { totalLessons: total };
+  return { totalLessons: lessons.length };
 };

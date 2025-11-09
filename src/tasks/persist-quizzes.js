@@ -3,9 +3,7 @@ import { doc } from '../core/ddb.js';
 import { env } from '../core/env.js';
 
 export const handler = async (event) => {
-  const { userId } = event;
-  const courseId = event.outline.course.id;
-  const quizzes = event.quizzes.items;
+  const quizzes = event.quizzes.items || [];
 
   const requests = [];
   for (const qz of quizzes) {
@@ -13,9 +11,9 @@ export const handler = async (event) => {
       requests.push({
         PutRequest: {
           Item: {
-            PK: `UC#${userId}#${courseId}`,
-            SK: `QUIZ#LESSON#${qz.lessonId}#Q#${q.id}`,
-            etype: 'QUIZ_QUESTION',
+            PK: `LESSON#${qz.lessonId}`,
+            SK: `Q#${q.position}#${q.id}`,
+            etype: 'QUIZ_Q',
             lessonId: qz.lessonId,
             questionId: q.id,
             position: q.position,
@@ -26,9 +24,11 @@ export const handler = async (event) => {
       });
     }
   }
+
   for (let i = 0; i < requests.length; i += 25) {
-    const chunk = requests.slice(i, i + 25);
-    await doc.send(new BatchWriteCommand({ RequestItems: { [env.tableName]: chunk } }));
+    await doc.send(new BatchWriteCommand({
+      RequestItems: { [env.quizzesTable]: requests.slice(i, i + 25) }
+    }));
   }
 
   return { questions: requests.length };

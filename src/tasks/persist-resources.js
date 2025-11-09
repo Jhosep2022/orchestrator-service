@@ -3,16 +3,18 @@ import { doc } from '../core/ddb.js';
 import { env } from '../core/env.js';
 
 export const handler = async (event) => {
-  const { userId } = event;
-  const courseId = event.outline.course.id;
-  const table = env.resourcesTableName;
+  const { items } = event.resources || {};
+  const courseId = event?.outline?.course?.id;
+  if (!Array.isArray(items) || items.length === 0) return { created: 0, linked: 0 };
+  if (!courseId) throw new Error('COURSE_ID_REQUIRED_FOR_RESOURCES');
 
-  const puts = event.resources.items.map((r, i) => ({
+  // 1) Recursos globales
+  const globalPuts = items.map((r) => ({
     PutRequest: {
       Item: {
-        PK: `RES#GLOBAL`,                 // biblioteca global
+        PK: 'RES#GLOBAL',
         SK: `RES#${r.slug}`,
-        etype: 'LEARNING_RESOURCE',
+        etype: 'RESOURCE',
         slug: r.slug,
         title: r.title,
         resource_type: r.resource_type,
@@ -20,36 +22,44 @@ export const handler = async (event) => {
         description: r.description,
         is_published: true,
         createdAt: new Date().toISOString(),
-        // denormalización útil:
+
+        // GSI para listar por tipo si lo necesitas
         GSI1PK: 'TYPE#RESOURCE',
-        GSI1SK: r.resource_type.toUpperCase()
+        GSI1SK: (r.resource_type || '').toUpperCase(),
       }
     }
   }));
 
-  // Guardar recursos globales
-  for (let i = 0; i < puts.length; i += 25) {
-    const chunk = puts.slice(i, i + 25);
-    await doc.send(new BatchWriteCommand({ RequestItems: { [table]: chunk } }));
+  for (let i = 0; i < globalPuts.length; i += 25) {
+    await doc.send(new BatchWriteCommand({
+      RequestItems: { [env.resourcesTable]: globalPuts.slice(i, i + 25) }
+    }));
   }
 
-  // Relación curso → recurso (en tabla transaccional)
-  const rels = event.resources.items.map((r, idx) => ({
+  // 2) Links curso → recurso (mapeo M:N)
+  const relPuts = items.map((r, idx) => ({
     PutRequest: {
       Item: {
-        PK: `UC#${userId}#${courseId}`,
-        SK: `RES_LINK#${r.slug}`,
+        PK: `COURSE#${courseId}`,
+        SK: `RES#${r.slug}`,
         etype: 'COURSE_RESOURCE',
+        courseId,
         slug: r.slug,
         relation: 'supplementary',
-        position: idx + 1
+        position: idx + 1,
+        // denormalización útil:
+        resource_type: r.resource_type,
+        title: r.title,
+        createdAt: new Date().toISOString(),
       }
     }
   }));
-  for (let i = 0; i < rels.length; i += 25) {
-    const chunk = rels.slice(i, i + 25);
-    await doc.send(new BatchWriteCommand({ RequestItems: { [env.tableName]: chunk } }));
+
+  for (let i = 0; i < relPuts.length; i += 25) {
+    await doc.send(new BatchWriteCommand({
+      RequestItems: { [env.courseResTable]: relPuts.slice(i, i + 25) }
+    }));
   }
 
-  return { created: puts.length, linked: rels.length };
+  return { created: items.length, linked: items.length };
 };

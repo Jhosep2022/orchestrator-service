@@ -12,6 +12,12 @@
             "Type": "Task",
             "Resource": "${PersistCourseArn}",
             "ResultPath": "$.persistCourse",
+            "Next": "PersistModules"
+        },
+        "PersistModules": {
+            "Type": "Task",
+            "Resource": "${PersistModulesArn}",
+            "ResultPath": "$.persistModules",
             "Next": "GenerateLessons"
         },
         "GenerateLessons": {
