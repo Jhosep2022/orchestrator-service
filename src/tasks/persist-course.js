@@ -10,7 +10,7 @@ export const handler = async (event) => {
   const pk = `COURSE#${course.id}`;
   const sk = 'METADATA';
 
-  await doc.send(new PutCommand({
+  const cmd = new UpdateCommand({
     TableName: env.coursesTable,
     key: { PK: pk, SK: sk },
     UpdateExpression: `
@@ -47,7 +47,7 @@ export const handler = async (event) => {
       ':gsi2pk': `USER#${userId}`,
       ':gsi2sk': `STATUS#active#${now}`
     }
-  }));
-
+  });
+  await doc.send(cmd);
   return { courseId: course.id };
 };
