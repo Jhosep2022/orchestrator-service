@@ -57,7 +57,7 @@ export const handler = async (event) => {
 
   for (let i = 0; i < relPuts.length; i += 25) {
     await doc.send(new BatchWriteCommand({
-      RequestItems: { [env.courseResTable]: relPuts.slice(i, i + 25) }
+      RequestItems: { [env.coursesTable]: relPuts.slice(i, i + 25) }
     }));
   }
 
