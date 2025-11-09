@@ -109,7 +109,18 @@ jobs:
 
           aws lambda update-function-configuration \
             --function-name "$NAME" \
-            --environment "Variables=STAGE=${{ steps.stage.outputs.STAGE }},LLM_PROVIDER=${{ steps.envs.outputs.LLM_PROVIDER }},GEMINI_MODEL_ID=${{ steps.envs.outputs.GEMINI_MODEL_ID }},GOOGLE_API_KEY=${{ steps.envs.outputs.GOOGLE_API_KEY }},COURSES_TABLE_NAME=${{ steps.envs.outputs.COURSES_TABLE }},RESOURCES_TABLE_NAME=${{ steps.envs.outputs.RESOURCES_TABLE }},ALLOWED_ORIGINS=${{ steps.envs.outputs.ALLOWED_ORIGINS }}"
+            --environment "Variables=
+              STAGE=${{ secrets.STAGE }},
+              LLM_PROVIDER=${{ secrets.LLM_PROVIDER }},
+              GEMINI_MODEL_ID=${{ secrets.GEMINI_MODEL_ID }},
+              GOOGLE_API_KEY=${{ secrets.GOOGLE_API_KEY }},
+              COURSES_TABLE_NAME=${{ secrets.COURSES_TABLE }},
+              RESOURCES_TABLE_NAME=${{ secrets.RESOURCES_TABLE }},
+              ALLOWED_ORIGINS=${{ secrets.ALLOWED_ORIGINS }},
+              MODULES_TABLE_NAME=${{ secrets.MODULES_TABLE_NAME }},
+              LESSONS_TABLE_NAME=${{ secrets.LESSONS_TABLE_NAME }},
+              QUIZZES_TABLE_NAME=${{ secrets.QUIZZES_TABLE_NAME }},
+              EXAMS_TABLE_NAME=${{ secrets.EXAMS_TABLE_NAME }}"
 
           aws lambda wait function-updated --function-name "$NAME"
 
