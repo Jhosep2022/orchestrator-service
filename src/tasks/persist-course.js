@@ -7,27 +7,47 @@ export const handler = async (event) => {
   const { course } = event.outline;
   const now = new Date().toISOString();
 
-  const item = {
-    PK: `COURSE#${course.id}`,
-    SK: 'METADATA',
-    etype: 'COURSE',
-    ownerId: userId,
-    title: course.title,
-    level: course.level || 'beginner',
-    tags: course.tags || [],
-    isPublished: true,
-    status: 'active',
-    createdAt: now,
-    updatedAt: now,
-    GSI2PK: `USER#${userId}`,
-    GSI2SK: `STATUS#active#${now}`,
-  };
+  const pk = `COURSE#${course.id}`;
+  const sk = 'METADATA';
 
   await doc.send(new PutCommand({
     TableName: env.coursesTable,
-    Item: item,
-    ConditionExpression: 'attribute_not_exists(PK) AND attribute_not_exists(SK)',
+    key: { PK: pk, SK: sk },
+    UpdateExpression: `
+      SET
+        #etype = if_not_exists(#etype, :etype),
+        ownerId = if_not_exists(ownerId, :ownerId),
+        #title = if_not_exists(#title, :title),
+        #level = if_not_exists(#level, :level),
+        #tags = if_not_exists(#tags, :tags),
+        #isPublished = if_not_exists(#isPublished, :isPublished),
+        #status = if_not_exists(#status, :status),
+        #createdAt = if_not_exists(#createdAt, :createdAt)
+        GSI2PK = if_not_exists(GSI2PK, :gsi2pk),
+        GSI2SK = if_not_exists(GSI2SK, :gsi2sk)
+    `,
+    ExpressionAttributeNames: {
+      '#etype': 'etype',
+      '#title': 'title',
+      '#level': 'level',
+      '#tags': 'tags',
+      '#isPublished': 'isPublished',
+      '#status': 'status',
+      '#createdAt': 'createdAt',
+    },
+    ExpressionAttributeValues: {
+      ':etype': 'COURSE',
+      ':ownerId': userId,
+      ':title': course.title ?? 'Nuevo curso',
+      ':level': course.level ?? 'beginner',
+      ':tags': Array.isArray(course.tags) ? course.tags : [],
+      ':isPublished': true,
+      ':status': 'active',
+      ':createdAt': now,
+      ':gsi2pk': `USER#${userId}`,
+      ':gsi2sk': `STATUS#active#${now}`
+    }
   }));
 
-  return { courseId: course.id, createdAt: now };
+  return { courseId: course.id };
 };
