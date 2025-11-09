@@ -100,7 +100,6 @@ jobs:
           echo "COURSES_TABLE=${{ secrets.COURSES_TABLE_NAME }}"  >> "$GITHUB_OUTPUT"
           echo "RESOURCES_TABLE=${{ secrets.RESOURCES_TABLE_NAME }}" >> "$GITHUB_OUTPUT"
 
-      # === Actualiza ENV y CODE de cada función ===
       - name: Update function configuration (env)
         shell: bash
         run: |
