@@ -16,7 +16,9 @@
     "@google/generative-ai": "^0.21.0"
   },
   "devDependencies": {
+    "esbuild": "^0.25.12",
     "serverless": "^3.39.0",
+    "serverless-esbuild": "^1.55.1",
     "serverless-step-functions": "^3.7.0"
   },
   "engines": {
