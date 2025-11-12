@@ -6,16 +6,15 @@
             "Type": "Task",
             "Resource": "${GenerateOutlineArn}",
             "ResultPath": "$.gen",
-            "Next": "MergeOutline"
+            "Next": "Normalize"
         },
-        "MergeOutline": {
+        "Normalize": {
             "Type": "Pass",
             "Parameters": {
                 "requestId.$": "$.requestId",
                 "userId.$": "$.userId",
                 "payload.$": "$.payload",
-                "outline.$": "$.gen.outline",
-                "lessons.$": "$.gen.lessons"
+                "outline.$": "$.gen"
             },
             "ResultPath": "$",
             "Next": "PersistCourse"
