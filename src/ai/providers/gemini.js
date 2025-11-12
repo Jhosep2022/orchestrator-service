@@ -106,7 +106,7 @@ export async function generateExam({ course }) {
 export async function generateResources({ course }) {
   const sys = "Eres un generador de recursos complementarios. Devuelve SOLO JSON válido.";
   const user = `Genera recursos variados (article|practice|video|cheatsheet) para el curso.
-DEVUELVE ESTE FORMATO ESTRICTO (sin comentarios, sin claves extra):
+DEVUELVE ESTE FORMATO ESTRICTO (sin comentarios, sin claves extra, sin fences):
 {
   "resources": {
     "items": [
@@ -116,15 +116,18 @@ DEVUELVE ESTE FORMATO ESTRICTO (sin comentarios, sin claves extra):
         "resourceType": "article|practice|video|cheatsheet",
         "durationMinutes": 5,
         "description": "string",
-        "overview": "string",
+        "overview": "string|null",
         "actionLabel": "string",
-        "actionUrl": "https://...",
+        "actionUrl": "https://...|null",
         "tags": ["..."],
-        "lessonId": "l_1"   // opcional, si aplica
+        "lessonId": "l_1|null"
       }
     ]
   }
 }
+
+Debes generar al MENOS 4 recursos, distribuyéndolos entre tipos.
+Mantén consistencia con course.lessons cuando asignes lessonId.
 
 INPUT (course):
 ${JSON.stringify(course).slice(0, 8000)}`;
