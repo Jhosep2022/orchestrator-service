@@ -1,4 +1,4 @@
-// src/tasks/persist-lessons.js
+// src/tasks/persist-lessons.js (fragmento inicial)
 import { BatchWriteCommand } from '@aws-sdk/lib-dynamodb';
 import { doc } from '../core/ddb.js';
 import { env } from '../core/env.js';
@@ -16,66 +16,45 @@ export const handler = async (event) => {
   if (!course?.id) throw new Error('MISSING_COURSE_ID');
   const courseId = course.id;
 
-  let rawLessons =
+  // 👇 NUEVO: soporta los 3 casos
+  const rawLessons =
     event?.lessons?.items ||
     event?.lessons?.lessons?.items ||
-    (Array.isArray(event?.lessons) ? event.lessons : []) ||
+    event?.lessons ||
     [];
-
   const list = Array.isArray(rawLessons) ? rawLessons : [];
   const mods = Array.isArray(modules) ? modules : [];
 
-  // Posición por módulo (para ordenar GSI)
   const posByModule = new Map(mods.map((m, i) => [m.id, m.position ?? (i + 1)]));
 
-  // Si falta "order" en una lección, lo autoincrementamos por módulo
-  const orderByModule = Object.create(null);
-
-  const puts = list.map((l, idx) => {
-    const moduleId = l.moduleId || 'm_?';
-
-    // order calculado si no viene
-    if (!orderByModule[moduleId]) orderByModule[moduleId] = 0;
-    const order = Number.isFinite(l.order) ? l.order : ++orderByModule[moduleId];
-
-    const orderPadded = String(order).padStart(3, '0');
-    const mpos = posByModule.get(moduleId) || 0;
-    const mposPadded = String(mpos).padStart(2, '0');
-
-    const lessonId = l.id || `auto_${idx + 1}`;
-
+  const puts = list.map((l) => {
+    const mpos = posByModule.get(l.moduleId) || 0;
     return {
       PutRequest: {
         Item: {
-          PK: `MODULE#${moduleId}`,
-          SK: `LESSON#${orderPadded}#${lessonId}`,
+          PK: `MODULE#${l.moduleId}`,
+          SK: `LESSON#${l.order}#${l.id}`,
           etype: 'LESSON',
-
           courseId,
-          moduleId,
-          lessonId,
-          title: l.title ?? '',
-          durationMinutes: l.durationMinutes ?? 10,
-          order,
+          moduleId: l.moduleId,
+          lessonId: l.id,
+          title: l.title,
+          durationMinutes: Number(l.durationMinutes ?? 10),
+          order: Number(l.order ?? 0),
           contentMD: l.contentMD ?? '',
           summary: l.summary ?? null,
-          tips: Array.isArray(l.tips) ? l.tips : [],
-          miniChallenge: l.miniChallenge ?? null,
-          createdAt: new Date().toISOString(),
-
-          // GSI por curso -> módulo -> lección
           GSI1PK: `COURSE#${courseId}`,
-          GSI1SK: `M#${mposPadded}#L#${orderPadded}#${lessonId}`,
+          GSI1SK: `M#${String(mpos).padStart(4,'0')}#L#${String(l.order ?? 0).padStart(4,'0')}#${l.id}`,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
         }
       }
     };
   });
 
   for (let i = 0; i < puts.length; i += 25) {
-    const chunk = puts.slice(i, i + 25);
-    if (chunk.length === 0) break;
     await doc.send(new BatchWriteCommand({
-      RequestItems: { [env.lessonsTable]: chunk }
+      RequestItems: { [env.lessonsTable]: puts.slice(i, i + 25) }
     }));
   }
 

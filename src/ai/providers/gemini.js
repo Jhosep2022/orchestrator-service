@@ -55,27 +55,29 @@ Estructura JSON:
 
 export async function generateLessons({ course }) {
   const sys = "Eres un generador de contenido de lecciones. Devuelve SOLO JSON válido.";
-  const user = `Genera contenido breve (Markdown) por lección para este curso.
-ENTRADA (course):
-${JSON.stringify(course).slice(0, 8000)}
+  const user = `Genera contenido breve (Markdown) por lección PARA CADA lección listada en course.lessons.
+La salida DEBE mantener el mismo número de lecciones y respetar id, moduleId y order.
 
-SALIDA ESTRICTA (JSON válido, con wrapper):
+SALIDA ESTRICTA (JSON sin comentarios, sin markdown fences):
 {
   "lessons": {
     "items": [
       {
         "id": "l_1",
         "moduleId": "m_1",
-        "title": "...",
+        "title": "string",
         "durationMinutes": 12,
         "order": 1,
-        "contentMD": "...",
+        "contentMD": "markdown corto",
         "tips": ["..."],
         "miniChallenge": "..."
       }
     ]
   }
-}`;
+}
+
+INPUT course:
+${JSON.stringify(course).slice(0, 8000)}`;
 
   const text = await chatGemini(
     [{ role: "system", content: sys }, { role: "user", content: user }],
@@ -83,6 +85,7 @@ SALIDA ESTRICTA (JSON válido, con wrapper):
   );
   return JSON.parse(text);
 }
+
 
 
 export async function generateQuizzes({ course }) {
