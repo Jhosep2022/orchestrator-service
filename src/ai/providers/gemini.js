@@ -54,13 +54,36 @@ Estructura JSON:
 }
 
 export async function generateLessons({ course }) {
-  const user = `Genera contenido breve (Markdown) por lección. Entrada:
+  const sys = "Eres un generador de contenido de lecciones. Devuelve SOLO JSON válido.";
+  const user = `Genera contenido breve (Markdown) por lección para este curso.
+ENTRADA (course):
 ${JSON.stringify(course).slice(0, 8000)}
-Salida:
-{ "lessons":[ { "id":"l_1","moduleId":"m_1","title":"...","durationMinutes":12,"contentMD":"...","tips":["..."],"miniChallenge":"..." } ] }`;
-  const text = await chatGemini([{ role: "user", content: user }], { maxTokens: 3000 });
+
+SALIDA ESTRICTA (JSON válido, con wrapper):
+{
+  "lessons": {
+    "items": [
+      {
+        "id": "l_1",
+        "moduleId": "m_1",
+        "title": "...",
+        "durationMinutes": 12,
+        "order": 1,
+        "contentMD": "...",
+        "tips": ["..."],
+        "miniChallenge": "..."
+      }
+    ]
+  }
+}`;
+
+  const text = await chatGemini(
+    [{ role: "system", content: sys }, { role: "user", content: user }],
+    { maxTokens: 3000 }
+  );
   return JSON.parse(text);
 }
+
 
 export async function generateQuizzes({ course }) {
   const user = `Genera 2-3 preguntas por lección (multiopción). Incluye isCorrect en opciones.
@@ -78,9 +101,34 @@ export async function generateExam({ course }) {
 }
 
 export async function generateResources({ course }) {
-  const user = `Genera recursos complementarios variados (article|practice|video|cheatsheet).
-Salida:
-{ "resources":[ { "slug":"guia-clases-objetos","title":"...","resource_type":"cheatsheet","duration_minutes":7,"description":"...","overview":"...","action_label":"Ver detalle","action_url":"https://example.com","tags":["..."] } ] }`;
-  const text = await chatGemini([{ role: "user", content: user }], { maxTokens: 2200 });
+  const sys = "Eres un generador de recursos complementarios. Devuelve SOLO JSON válido.";
+  const user = `Genera recursos variados (article|practice|video|cheatsheet) para el curso.
+DEVUELVE ESTE FORMATO ESTRICTO (sin comentarios, sin claves extra):
+{
+  "resources": {
+    "items": [
+      {
+        "slug": "kebab-case-unico",
+        "title": "string",
+        "resourceType": "article|practice|video|cheatsheet",
+        "durationMinutes": 5,
+        "description": "string",
+        "overview": "string",
+        "actionLabel": "string",
+        "actionUrl": "https://...",
+        "tags": ["..."],
+        "lessonId": "l_1"   // opcional, si aplica
+      }
+    ]
+  }
+}
+
+INPUT (course):
+${JSON.stringify(course).slice(0, 8000)}`;
+
+  const text = await chatGemini(
+    [{ role: "system", content: sys }, { role: "user", content: user }],
+    { maxTokens: 2200 }
+  );
   return JSON.parse(text);
 }
