@@ -1,35 +1,25 @@
+import { generateResources as aiGenerateResources } from "../ai/index.js";
+
 export const handler = async (event) => {
-  const title = event.outline.course.title;
-  // si el flujo conoce lección actual, pásala aquí:
-  const lessonId = event?.outline?.currentLessonId ?? null;
+  const { outline, lessons } = event || {};
+  const input = { course: { ...outline?.course, modules: outline?.modules, lessons: lessons?.items } };
 
-  const now = Date.now();
-  const slug1 = `cheatsheet-${now}`;
-  const slug2 = `practice-${now}`;
+  const raw = await aiGenerateResources({ course: input });
 
-  return {
-    items: [
-      {
-        slug: slug1,
-        title: `Guía visual de ${title}`,
-        resource_type: 'cheatsheet',          // 'article' | 'practice' | 'video' | 'cheatsheet' ...
-        duration_minutes: 7,
-        description: `Resumen gráfico de conceptos de ${title}.`,
-        overview: `Esta guía cubre los puntos clave de ${title} con ejemplos.`,
-        action_url: `https://app.novalearn.io/resources/${slug1}`,
-        // opcional: indexar por lección
-        ...(lessonId ? { lessonId } : {})
-      },
-      {
-        slug: slug2,
-        title: `Katas de ${title}`,
-        resource_type: 'practice',
-        duration_minutes: 45,
-        description: `Ejercicios guiados para reforzar ${title}.`,
-        overview: `Colección de 10 katas progresivas sobre ${title}.`,
-        action_url: `https://app.novalearn.io/resources/${slug2}`,
-        ...(lessonId ? { lessonId } : {})
-      }
-    ]
-  };
+  const items = Array.isArray(raw?.resources)
+    ? raw.resources.map((r, idx) => ({
+        slug: r.slug || `resource-${idx + 1}`,
+        title: r.title || `Recurso ${idx + 1}`,
+        resourceType: (r.resource_type || r.resourceType || "article").toLowerCase(),
+        durationMinutes: Number(r.duration_minutes || r.durationMinutes || 5),
+        description: r.description || "",
+        overview: r.overview || "",
+        actionLabel: r.action_label || r.actionLabel || "Ir al recurso",
+        actionUrl: r.action_url || r.actionUrl || null,
+        tags: Array.isArray(r.tags) ? r.tags : [],
+        lessonId: r.lesson_id || r.lessonId || null,
+      }))
+    : [];
+
+  return { resources: { items } };
 };

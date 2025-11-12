@@ -1,28 +1,49 @@
+import { generateOutline as aiGenerateOutline } from "../ai/index.js";
+
 export const handler = async (event) => {
-  const { payload } = event;
-  // TODO: LLM aquí. Por ahora mock sencillo:
-  const modules = [
-    { id: "m1", title: "Fundamentos de POO" },
-    { id: "m2", title: "Relaciones y Principios" }
-  ];
-  const lessons = [
-    { moduleId: "m1", id: "l1", title: "Clases y Objetos", durationMinutes: 12 },
-    { moduleId: "m1", id: "l2", title: "Atributos y Métodos", durationMinutes: 15 },
-    { moduleId: "m1", id: "l3", title: "Encapsulamiento", durationMinutes: 10 },
-    { moduleId: "m2", id: "l4", title: "Herencia", durationMinutes: 18 },
-    { moduleId: "m2", id: "l5", title: "Polimorfismo", durationMinutes: 16 },
-    { moduleId: "m2", id: "l6", title: "Abstracción", durationMinutes: 14 }
-  ].map((x, i) => ({ ...x, order: i + 1 }));
+  const { payload = {} } = event || {};
+  const topic = payload.title || payload.topic || "Curso sin título";
+  const level = payload.level || "beginner";
+  const tags  = Array.isArray(payload.tags) ? payload.tags : [];
 
+  const raw = await aiGenerateOutline({ topic, level, tags });
 
+  // Normalización
+  const course = {
+    id: payload.draftCourseId, // <- mantener el draftId creado
+    title: raw?.course?.title || topic,
+    level: (raw?.course?.level || level).toLowerCase(),
+    tags: Array.isArray(raw?.course?.tags) ? raw.course.tags : tags,
+  };
+
+  // módulos con posición
+  const modules = (raw?.modules || []).map((m, idx) => ({
+    id: m.id || `m_${idx + 1}`,
+    title: m.title || `Módulo ${idx + 1}`,
+    position: typeof m.position === "number" ? m.position : idx + 1,
+    lessons: Array.isArray(m.lessons) ? m.lessons : [],
+  }));
+
+  // aplanar lecciones y numerarlas
+  const items = [];
+  let order = 1;
+  for (const m of modules) {
+    for (const l of (m.lessons || [])) {
+      items.push({
+        id: l.id || `l_${order}`,
+        moduleId: m.id,
+        title: l.title || `Lección ${order}`,
+        durationMinutes: Number(l.durationMinutes || l.duration_minutes || 10),
+        order: order++,
+      });
+    }
+    // limpiamos del módulo; persist-modules no espera lessons embebidas
+    delete m.lessons;
+  }
+
+  // 👇 DEVOLVEMOS con la forma que esperan los persist-*
   return {
-    course: {
-      id: payload.draftCourseId,
-      title: payload.title || "Curso generado",
-      level: payload.level || "beginner",
-      tags: payload.tags || []
-    },
-    modules,
-    lessons
+    outline: { course, modules },
+    lessons: { items }            // para que luego persist-lessons la tome directo
   };
 };

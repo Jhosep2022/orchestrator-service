@@ -1,14 +1,30 @@
+import { generateExam as aiGenerateExam } from "../ai/index.js";
+
 export const handler = async (event) => {
-  const { items } = event.lessons;
-  // IA mock: 1 pregunta por lección para el examen final
-  let pos = 1;
-  const questions = items.map((l) => ({
-    id: `ex_q${pos++}`,
-    prompt: `Pregunta general sobre ${l.title}`,
-    options: [
-      { key: 'A', label: 'Respuesta correcta', isCorrect: true,  feedback: 'Correcto' },
-      { key: 'B', label: 'Distractor',         isCorrect: false, feedback: 'No es correcto' }
-    ]
+  const { outline, lessons } = event || {};
+  const input = { course: { ...outline?.course, modules: outline?.modules, lessons: lessons?.items } };
+
+  const raw = await aiGenerateExam({ course: input });
+
+  const ex = raw?.exam || {};
+  const items = (ex.questions || []).map((q, i) => ({
+    id: q.id || `q${i + 1}`,
+    prompt: q.prompt || q.question || "",
+    options: (q.options || []).map((op) => ({
+      key: op.key || op.option || "",
+      label: op.label || "",
+      isCorrect: !!op.isCorrect,
+      feedback: op.feedback || "",
+    })),
+    position: Number(q.position || i + 1),
   }));
-  return { items: questions, meta: { mode: 'final', timeLimitMinutes: 20 } };
+
+  const meta = {
+    id: ex.id || "ex_1",
+    title: ex.title || "Examen final",
+    mode: ex.mode || "final",
+    timeLimitMinutes: Number(ex.timeLimitMinutes || 0),
+  };
+
+  return { exam: { items, meta } };
 };

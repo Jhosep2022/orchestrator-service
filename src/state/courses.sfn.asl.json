@@ -5,7 +5,7 @@
         "GenerateOutline": {
             "Type": "Task",
             "Resource": "${GenerateOutlineArn}",
-            "ResultPath": "$.outline",
+            "ResultPath": "$",
             "Next": "PersistCourse"
         },
         "PersistCourse": {
