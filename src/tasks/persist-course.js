@@ -3,84 +3,127 @@ import { UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { doc } from '../core/ddb.js';
 import { env } from '../core/env.js';
 
-export const handler = async (event) => {
-  const requestId = event?.requestId || 'no-request-id';
-  const userId = event?.userId;
-  const course = event?.outline?.course;
+// --- helpers robustos ---
+const pickCourseId = (evt) =>
+  evt?.courseId ??
+  evt?.draftCourseId ??
+  evt?.payload?.courseId ??
+  evt?.payload?.draftCourseId ??
+  evt?.outline?.course?.id ??
+  evt?.outline?.outline?.course?.id ??           // <- tu caso
+  null;
 
-  // Resuelve table name (por si en algún deploy viene directo del process.env)
-  const TableName = env.tableName || process.env.COURSES_TABLE_NAME;
+const pickCourseObj = (evt) =>
+  evt?.course ??
+  evt?.payload?.course ??
+  evt?.outline?.course ??
+  evt?.outline?.outline?.course ?? null;         // <- tu caso
 
-  // Validaciones mínimas para evitar nulls
+export const handler = async (event = {}) => {
+  const requestId = event.requestId || 'no-request-id';
+  const userId =
+    event.userId ??
+    event.payload?.userId ??
+    'unknown';
+
+  // Resuelve nombre de tabla correctamente
+  const TableName =
+    env.coursesTable ||             // <- variable típica en tu proyecto
+    env.tableName ||                // fallback si alguien la llamó así
+    process.env.COURSES_TABLE_NAME; // fallback por entorno
+
   if (!TableName) {
-    console.error('[PERSIST][ERR] Missing TableName', { requestId, envTable: env?.tableName, rawEnv: process.env.COURSES_TABLE_NAME });
+    console.error('[PERSIST][ERR] Missing TableName', {
+      requestId,
+      envCourses: env?.coursesTable,
+      envTable: env?.tableName,
+      rawEnv: process.env.COURSES_TABLE_NAME
+    });
     throw new Error('MISSING_TABLE_NAME');
   }
-  if (!userId) {
-    console.error('[PERSIST][ERR] Missing userId', { requestId });
+  if (!userId || userId === 'unknown') {
+    console.error('[PERSIST][ERR] Missing userId', { requestId, userId });
     throw new Error('MISSING_USER_ID');
   }
-  if (!course?.id) {
-    console.error('[PERSIST][ERR] Missing course.id', { requestId, course });
+
+  const courseId = pickCourseId(event);
+  const course = pickCourseObj(event);
+
+  if (!courseId) {
+    console.error('[PERSIST][ERR] MISSING_COURSE_ID', {
+      requestId,
+      fromPayload: event?.payload?.draftCourseId,
+      fromOutline: event?.outline?.outline?.course?.id,
+    });
     throw new Error('MISSING_COURSE_ID');
   }
 
+  // si vino objeto course sin id, injéctaselo
+  const safeCourse = { id: courseId, ...course };
+
   const now = new Date().toISOString();
-  const pk = `COURSE#${course.id}`;
+  const pk = `COURSE#${safeCourse.id}`;
   const sk = 'METADATA';
 
-  // Debug útil
   console.log('[PERSIST][IN]', JSON.stringify({
     requestId, TableName, pk, sk, userId,
-    courseId: course.id, title: course.title, level: course.level, tagsCount: Array.isArray(course.tags) ? course.tags.length : 0
+    courseId: safeCourse.id,
+    hasCourse: !!course,
+    title: safeCourse.title,
+    level: safeCourse.level,
+    tagsCount: Array.isArray(safeCourse.tags) ? safeCourse.tags.length : 0
   }));
 
   const cmd = new UpdateCommand({
     TableName,
-    // 👇 OJO: Key con mayúscula
     Key: { PK: pk, SK: sk },
     UpdateExpression: `
       SET
         #etype       = if_not_exists(#etype, :etype),
-        ownerId      = if_not_exists(ownerId, :ownerId),
-        #title       = if_not_exists(#title, :title),
-        #level       = if_not_exists(#level, :level),
-        #tags        = if_not_exists(#tags, :tags),
-        #isPublished = if_not_exists(#isPublished, :isPublished),
+        #ownerId     = if_not_exists(#ownerId, :ownerId),
+        #title       = :title,
+        #level       = :level,
+        #tags        = :tags,
         #status      = if_not_exists(#status, :status),
-        #createdAt   = if_not_exists(#createdAt, :createdAt),
+        #isPublished = if_not_exists(#isPublished, :isPublished),
+        #updatedAt   = :now,
+        #createdAt   = if_not_exists(#createdAt, :now),
         GSI2PK       = if_not_exists(GSI2PK, :gsi2pk),
-        GSI2SK       = if_not_exists(GSI2SK, :gsi2sk)
+        GSI2SK       = :gsi2sk
     `.replace(/\s+/g, ' ').trim(),
     ExpressionAttributeNames: {
-      '#etype': 'etype',
+      '#etype': 'entityType',
+      '#ownerId': 'ownerId',
       '#title': 'title',
       '#level': 'level',
       '#tags': 'tags',
-      '#isPublished': 'isPublished',
       '#status': 'status',
+      '#isPublished': 'isPublished',
+      '#updatedAt': 'updatedAt',
       '#createdAt': 'createdAt',
     },
     ExpressionAttributeValues: {
       ':etype': 'COURSE',
       ':ownerId': userId,
-      ':title': course.title ?? 'Nuevo curso',
-      ':level': course.level ?? 'beginner',
-      ':tags': Array.isArray(course.tags) ? course.tags : [],
-      ':isPublished': true,
-      ':status': 'active',
-      ':createdAt': now,
+      ':title': safeCourse.title ?? 'Nuevo curso',
+      ':level': safeCourse.level ?? 'beginner',
+      ':tags': Array.isArray(safeCourse.tags) ? safeCourse.tags : [],
+      ':status': 'draft',           // si luego publicas, cámbialo a 'active'
+      ':isPublished': false,        // idem
+      ':now': now,
       ':gsi2pk': `USER#${userId}`,
-      ':gsi2sk': `STATUS#active#${now}`
-    }
+      ':gsi2sk': `UPDATED#${now}`,
+    },
   });
 
   try {
     const out = await doc.send(cmd);
-    console.log('[PERSIST][OUT]', JSON.stringify({ requestId, updated: true, outSummary: { ConsumedCapacity: out?.ConsumedCapacity } }));
-    return { courseId: course.id };
+    console.log('[PERSIST][OUT]', JSON.stringify({
+      requestId, updated: true,
+      consumed: out?.ConsumedCapacity
+    }));
+    return { ok: true, courseId: safeCourse.id };
   } catch (e) {
-    // Log completo para CloudWatch
     console.error('[PERSIST][ERR][DDB]', {
       requestId,
       name: e.name,
