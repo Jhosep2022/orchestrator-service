@@ -2,7 +2,6 @@
 export {
   generateOutline,
   generateLessons,
-  generateQuizzes,
   generateExam,
   generateResources
 } from './providers/gemini.js';
