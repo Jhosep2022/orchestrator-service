@@ -6,6 +6,16 @@ import { env } from '../core/env.js';
 const CHUNK = 25;
 const pad = (n, size) => String(n).padStart(size, '0');
 
+// 🔧 Fallback seguro para summary (2 oraciones o hasta 300 chars)
+function shortSummaryFallback(md = '') {
+  const txt = String(md).replace(/\s+/g, ' ').trim();
+  if (!txt) return null;
+  // Intenta capturar 2 oraciones
+  const m = txt.match(/^(.+?\.)\s+(.+?\.)/);
+  const s = (m ? m[0] : txt.slice(0, 220)).slice(0, 300);
+  return s;
+}
+
 function resolveOutline(evt) {
   const o1 = evt?.outline;
   if (!o1) return { course: null, modules: [] };
@@ -27,8 +37,13 @@ function pickLessonsArray(evt) {
 export const handler = async (event) => {
   const requestId = event?.requestId || 'no-request-id';
 
-  // Tablas desde env (permite fallback si definiste las vars directas)
-  const lessonsTable = env.lessonsTable
+  // ✅ Resuelve nombre de tabla con alias y fallbacks
+  const lessonsTable =
+    env.lessonsTable ||
+    env.lessonsTableName ||
+    process.env.LESSONS_TABLE_NAME ||
+    env.tableName ||
+    process.env.TABLE_NAME;
 
   const { course, modules } = resolveOutline(event);
   const courseId =
@@ -36,7 +51,7 @@ export const handler = async (event) => {
     event?.outline?.course?.id ||
     event?.payload?.draftCourseId;
 
-  const finalLessons = pickLessonsArray(event); // <-- usa las lecciones con contenido
+  const finalLessons = pickLessonsArray(event);
   const moduleIdMap = event?.persistModules?.moduleIdMap || {}; // { m_1: <uuid>, ... }
 
   if (!lessonsTable) {
@@ -52,20 +67,26 @@ export const handler = async (event) => {
     return { ok: true, persisted: 0, courseId };
   }
 
-  // Posición del módulo para ordenar en GSI1SK
-  const modulePosById = new Map((modules || []).map(m => [m.id, Number(m.position) || 0]));
+  // Mapa: UUID de módulo -> position (usa IDs del outline, que ya deberían ser UUID aquí)
+  const modulePosById = new Map(
+    (modules || []).map(m => [m.id, Number(m.position) || 0])
+  );
 
-  // Normaliza cada lección y mapea moduleId (m_#) -> UUID real
   const nowISO = new Date().toISOString();
   const normalized = finalLessons.map((L, idx) => {
-    const oldModuleId = L.moduleId;                 // ej: "m_3"
-    const realModuleId = moduleIdMap[oldModuleId];  // ej: "da8c67..." (UUID)
-    const lessonId = L.lessonId || L.id;            // algunas IAs usan "id", nosotros guardamos "lessonId"
+    const oldModuleId = L.moduleId;                      // p.ej. "m_3"
+    const realModuleId = moduleIdMap[oldModuleId] || oldModuleId; // UUID resuelto
+    const lessonId = L.lessonId || L.id;
     const order = Number(L.order ?? (idx + 1));
-    const modulePos = Number(modulePosById.get(oldModuleId) || 0);
-    const summary = L.summary && String(L.summary).trim().length >= 60
-      ? String(L.summary).trim()
-      : shortSummaryFallback(L.contentMD || '');
+
+    // ✅ Usa el UUID real para resolver la posición del módulo
+    const modulePos = Number(modulePosById.get(realModuleId) || 0);
+
+    // ✅ Summary robusto: usa IA si viene bien; si no, deriva de contentMD
+    const summary =
+      (L.summary && String(L.summary).trim().length >= 60)
+        ? String(L.summary).trim().slice(0, 300)
+        : shortSummaryFallback(L.contentMD || '');
 
     if (!realModuleId) {
       console.error('[LESSONS][ERR] Missing realModuleId', { requestId, oldModuleId, lessonId, title: L?.title });
@@ -77,18 +98,17 @@ export const handler = async (event) => {
     }
 
     return {
-      // PK/SK para lectura por módulo y orden estable
+      // Clave principal por módulo
       PK: `MODULE#${realModuleId}`,
       SK: `LESSON#${pad(order, 4)}#${lessonId}`,
 
-      // Tipo de entidad (útil para filtros)
       etype: 'LESSON',
 
-      // GSI para listar por curso (IndexName: 'byCourse')
+      // GSI para consultar por curso ordenado por módulo + orden de lección
       GSI1PK: `COURSE#${courseId}`,
       GSI1SK: `M#${pad(modulePos, 5)}#L#${pad(order, 5)}#${lessonId}`,
 
-      // Datos de negocio
+      // Datos
       courseId,
       moduleId: realModuleId,
       lessonId,
@@ -97,7 +117,7 @@ export const handler = async (event) => {
       durationMinutes: Number(L.durationMinutes ?? 0) || null,
       contentMD: L.contentMD ?? '',
       contentUrl: L.contentUrl ?? '',
-      summary,
+      summary: summary ?? null,
       tips: Array.isArray(L.tips) ? L.tips : [],
       miniChallenge: L.miniChallenge ?? null,
 
@@ -106,7 +126,7 @@ export const handler = async (event) => {
     };
   });
 
-  // Escribe en lotes de 25
+  // Batch write (25)
   const chunks = [];
   for (let i = 0; i < normalized.length; i += CHUNK) {
     chunks.push(normalized.slice(i, i + CHUNK));
@@ -133,9 +153,5 @@ export const handler = async (event) => {
     requestId, courseId, total, table: lessonsTable,
   });
 
-  return {
-    ok: true,
-    persisted: total,
-    courseId,
-  };
+  return { ok: true, persisted: total, courseId };
 };
