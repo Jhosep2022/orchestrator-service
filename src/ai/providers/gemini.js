@@ -85,18 +85,29 @@ Estructura JSON:
 }
 
 export async function generateLessons({ course }) {
-  const sys = "Eres un generador de contenido de lecciones. Devuelve SOLO JSON válido.";
+  const sys = "Eres un generador de contenido de lecciones para un e-learning de PROGRAMACIÓN. Devuelve SOLO JSON válido (sin fences).";
 
   const user = `Genera para CADA lección en course.lessons un objeto con:
   - id, moduleId, order (idénticos a entrada)
-  - title (mejorado si viene muy genérico)
-  - durationMinutes (mantén o ajusta 8-15 min según título)
-  - summary (2–3 oraciones; 140–300 caracteres; sin saltos de línea)
-  - contentMD (Markdown claro con secciones ## Objetivos, ## Conceptos clave, ## Ejemplo, ## Mini-ejercicio)
-  - tips (2–4 bullets prácticos)
-  - miniChallenge (reto breve, 1-2 líneas)
+  - title (mejorado si viene genérico)
+  - durationMinutes (8–15 según título)
+  - summary (2–3 oraciones; 140–300 caracteres; sin saltos de línea; NO placeholders)
+  - contentMD (Markdown con SECCIONES obligatorias: 
+      ## Objetivos (bullets)
+      ## Conceptos clave (bullets)
+      ## Ejemplo (al menos un bloque de código con triple fence \`\`\` ... \`\`\`)
+      ## Mini-ejercicio (1–2 líneas orientadas a práctica)
+    )
+  - tips (2–4 bullets prácticos, concretos para distintos lenguajes de programación)
+  - miniChallenge (reto breve, 1–2 líneas, distinto al mini-ejercicio)
 
-  SALIDA **ESTRICTA** (JSON puro, sin comentarios ni fences):
+  RESTRICCIONES ESTRICTAS:
+  - Tema: Programación en distintos lenguajes de programacion.
+  - Prohibido texto placebo como "Contenido en preparación", "por definir", etc.
+  - contentMD debe tener >= 400 caracteres y al menos un bloque \`\`\`.
+  - JSON puro, sin comentarios ni fences.
+
+  SALIDA (estructura EXACTA):
   {
     "lessons": {
       "items": [
@@ -106,8 +117,8 @@ export async function generateLessons({ course }) {
           "title": "string",
           "durationMinutes": 12,
           "order": 1,
-          "summary": "string corto (2-3 oraciones)",
-          "contentMD": "markdown con secciones",
+          "summary": "string (2-3 oraciones, 140-300 caracteres)",
+          "contentMD": "markdown con secciones y código",
           "tips": ["...", "..."],
           "miniChallenge": "..."
         }
@@ -115,26 +126,21 @@ export async function generateLessons({ course }) {
     }
   }
 
-  Reglas:
-  - No incluyas HTML.
-  - Mantén el mismo número de lecciones y los mismos id/moduleId/order.
-  - Usa español neutro y ejemplos de JavaScript cuando aplique.
+  INPUT course (recortado a 6k):
+  ${JSON.stringify(course).slice(0, 6000)}`;
 
-  INPUT course (recortado):
-  ${JSON.stringify(course).slice(0, 8000)}`;
+  const text = await chatGemini(
+    [{ role: "system", content: sys }, { role: "user", content: user }],
+    { maxTokens: 3000 }
+  );
 
-    const text = await chatGemini(
-      [{ role: "system", content: sys }, { role: "user", content: user }],
-      { maxTokens: 3000 }
-    );
-
-    let json;
-    try {
-      json = JSON.parse(text);
-    } catch (e) {
-      throw new Error("AI_JSON_PARSE_ERROR");
-    }
-    return json;
+  let json;
+  try {
+    json = JSON.parse(text);
+  } catch (e) {
+    throw new Error("AI_JSON_PARSE_ERROR");
+  }
+  return json;
 }
 
 
@@ -260,7 +266,7 @@ export async function generateExam({ course }) {
 
 export async function generateResources({ course }) {
   const sys = "Eres un generador de recursos complementarios. que busca referencias en la web. Devuelve SOLO JSON válido.";
-  const user = `Genera recursos variados (article|practice|video|cheatsheet) para el curso.
+  const user = `Genera recursos variados (article|practice|video|cheatsheet) para el curso tienes que buscarlo en la web no quiero inventados.
 DEVUELVE ESTE FORMATO ESTRICTO (sin comentarios, sin claves extra, sin fences):
 {
   "resources": {
@@ -281,7 +287,7 @@ DEVUELVE ESTE FORMATO ESTRICTO (sin comentarios, sin claves extra, sin fences):
   }
 }
 
-Debes generar al MENOS 4 recursos, distribuyéndolos entre tipos.
+Debes generar al MENOS 2 recursos, distribuyéndolos entre tipos.
 Mantén consistencia con course.lessons cuando asignes lessonId.
 
 INPUT (course):

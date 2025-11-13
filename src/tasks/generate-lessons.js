@@ -7,6 +7,76 @@ function looksUUID(s) {
   return typeof s === "string" && s.includes("-") && s.length >= 32;
 }
 
+
+function buildFallbackContentMD(title = "Lección") {
+  const topic = title.replace(/^Práctica:\s*/i, "").trim();
+  return [
+    `# ${title}`,
+    "",
+    "## Objetivos",
+    "- Comprender el concepto aplicado en Kotlin.",
+    "- Implementar un ejemplo simple y ejecutable.",
+    "- Practicar con un ejercicio breve.",
+    "",
+    "## Conceptos clave",
+    "- Sintaxis de Kotlin relacionada con el tema.",
+    "- Clases, funciones y propiedades pertinentes.",
+    "- Buenas prácticas y manejo de errores comunes.",
+    "",
+    "## Ejemplo",
+    "```kotlin",
+    "data class Usuario(val nombre: String, val edad: Int)",
+    "",
+    "fun saludar(u: Usuario): String {",
+    '    return "Hola ${u.nombre}, tienes ${u.edad} años"',
+    "}",
+    "",
+    "fun main() {",
+    '    val u = Usuario("Ana", 28)',
+    "    println(saludar(u))",
+    "}",
+    "```",
+    "",
+    "## Mini-ejercicio",
+    `- Crea una función relacionada con “${topic}” que reciba parámetros y retorne un resultado; luego imprime el resultado en main().`,
+  ].join("\n");
+}
+
+function ensureLessonFilled(l, idx = 0) {
+  const content = String(l.contentMD || "").trim();
+  const title = (l.title || `Lección ${idx + 1}`).trim();
+
+  // Requisitos mínimos: contenido con bloque ```kotlin y longitud razonable
+  const hasKotlinBlock = /```kotlin/.test(content);
+  const enoughLength = content.length >= 200;
+  const contentMD = hasKotlinBlock && enoughLength ? content : buildFallbackContentMD(title);
+
+  const summaryOk = typeof l.summary === "string" && l.summary.trim().length >= 60;
+  const summary = summaryOk
+    ? l.summary.trim().slice(0, 300)
+    : `En esta lección sobre ${title} revisamos conceptos clave y un ejemplo práctico en Kotlin. El objetivo es comprender la idea central y aplicarla con un mini-ejercicio.`;
+
+  const tips = Array.isArray(l.tips) && l.tips.length > 0
+    ? l.tips
+    : [
+        "Compila y ejecuta el ejemplo tal cual para validar el flujo.",
+        "Prefiere funciones pequeñas y nombres claros.",
+        "Aprovecha data classes y null-safety de Kotlin.",
+      ];
+
+  const miniChallenge = l.miniChallenge || `Refactoriza el ejemplo para manejar casos límite y agrega una prueba simple.`;
+
+  return {
+    ...l,
+    title,
+    contentMD,
+    summary,
+    tips,
+    miniChallenge,
+  };
+}
+
+
 /** Construye esqueleto: 2 lecciones por módulo, usando moduleId UUID y ids UUID para lessons */
 function buildLessonSkeleton(modules, moduleIdMap) {
   const out = [];
@@ -88,13 +158,14 @@ export const handler = async (event) => {
   // 3) Si IA devuelve vacío, fallback con baseLessons
   if (items.length === 0) {
     console.warn("[LESSONS][gen] IA devolvió vacío; aplicando Fallback.");
-    items = baseLessons.map((l) => ({
+    items = baseLessons.map((l, i) => ensureLessonFilled({
       ...l,
-      contentMD: `# ${l.title}\n\nContenido en preparación.`,
+      contentMD: "", // forzamos a construir contenido útil
       tips: [],
       miniChallenge: null,
-    }));
+    }, i));
   }
+
 
   // 4) Normalización final: forzar UUID de lesson.id y moduleId en UUID
   const normalized = items.map((l, idx) => {
