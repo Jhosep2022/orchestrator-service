@@ -55,10 +55,17 @@ Estructura JSON:
 
 export async function generateLessons({ course }) {
   const sys = "Eres un generador de contenido de lecciones. Devuelve SOLO JSON válido.";
-  const user = `Genera contenido breve (Markdown) por lección PARA CADA lección listada en course.lessons.
-La salida DEBE mantener el mismo número de lecciones y respetar id, moduleId y order.
 
-SALIDA ESTRICTA (JSON sin comentarios, sin markdown fences):
+  const user = `Genera para CADA lección en course.lessons un objeto con:
+- id, moduleId, order (idénticos a entrada)
+- title (mejorado si viene muy genérico)
+- durationMinutes (mantén o ajusta 8-15 min según título)
+- summary (2–3 oraciones; 140–300 caracteres; sin saltos de línea)
+- contentMD (Markdown claro con secciones ## Objetivos, ## Conceptos clave, ## Ejemplo, ## Mini-ejercicio)
+- tips (2–4 bullets prácticos)
+- miniChallenge (reto breve, 1-2 líneas)
+
+SALIDA **ESTRICTA** (JSON puro, sin comentarios ni fences):
 {
   "lessons": {
     "items": [
@@ -68,22 +75,35 @@ SALIDA ESTRICTA (JSON sin comentarios, sin markdown fences):
         "title": "string",
         "durationMinutes": 12,
         "order": 1,
-        "contentMD": "markdown corto",
-        "tips": ["..."],
+        "summary": "string corto (2-3 oraciones)",
+        "contentMD": "markdown con secciones",
+        "tips": ["...", "..."],
         "miniChallenge": "..."
       }
     ]
   }
 }
 
-INPUT course:
+Reglas:
+- No incluyas HTML.
+- Mantén el mismo número de lecciones y los mismos id/moduleId/order.
+- Usa español neutro y ejemplos de JavaScript cuando aplique.
+
+INPUT course (recortado):
 ${JSON.stringify(course).slice(0, 8000)}`;
 
   const text = await chatGemini(
     [{ role: "system", content: sys }, { role: "user", content: user }],
     { maxTokens: 3000 }
   );
-  return JSON.parse(text);
+
+  let json;
+  try {
+    json = JSON.parse(text);
+  } catch (e) {
+    throw new Error("AI_JSON_PARSE_ERROR");
+  }
+  return json;
 }
 
 
