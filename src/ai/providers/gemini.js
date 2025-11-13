@@ -149,37 +149,70 @@ function safeJsonParseExam(text) {
   const len = (text || "").length;
   console.log(`[EXAM][RAW][len=${len}] head=`, (text || "").slice(0, 600));
 
+  // --- helpers locales ---
+  const stripCodeFences = (s = "") =>
+    s.replace(/```json\s*([\s\S]*?)```/gi, "$1")
+     .replace(/```\s*([\s\S]*?)```/g, "$1");
+
+  const dropAfterLastBrace = (s = "") => {
+    const start = s.indexOf("{");
+    const end = s.lastIndexOf("}");
+    if (start === -1 || end === -1 || end <= start) return s;
+    return s.slice(start, end + 1);
+  };
+
+  const removeTrailingCommas = (s = "") =>
+    s.replace(/,\s*([}\]])/g, "$1");
+
+  const removeInvisible = (s = "") =>
+    s
+      .replace(/^\uFEFF/, "")    // BOM
+      .replace(/\u200B/g, "")    // ZWSP
+      .replace(/\u200C/g, "")    // ZWNJ
+      .replace(/\u200D/g, "")    // ZWJ
+      .replace(/\u2028|\u2029/g, " "); // separadores de línea Unicode
+
   // 2) saneo básico
-  let t = stripCodeFences(text || "");
+  let t = removeInvisible(text || "");
+  t = stripCodeFences(t);
   t = dropAfterLastBrace(t);
 
   // 3) chequeo balanceo simple de llaves/corchetes
-  const openBraces = (t.match(/{/g) || []).length;
-  const closeBraces = (t.match(/}/g) || []).length;
-  const openBrackets = (t.match(/\[/g) || []).length;
-  const closeBrackets = (t.match(/]/g) || []).length;
+  const count = (re) => (t.match(re) || []).length;
+  let ob = count(/{/g), cb = count(/}/g), oB = count(/\[/g), cB = count(/]/g);
 
-  if (openBraces !== closeBraces || openBrackets !== closeBrackets) {
-    // último intento: cortar al último } y limpiar comas colgantes
+  if (ob !== cb || oB !== cB) {
+    // intento 1: limpiar comas colgantes + recortar al último }
     t = removeTrailingCommas(dropAfterLastBrace(t));
-    const ob = (t.match(/{/g) || []).length;
-    const cb = (t.match(/}/g) || []).length;
-    const oB = (t.match(/\[/g) || []).length;
-    const cB = (t.match(/]/g) || []).length;
-    if (ob !== cb || oB !== cB) {
-      console.error("[EXAM][PARSE][UNBALANCED] counters:", {
-        openBraces, closeBraces, openBrackets, closeBrackets,
-        afterFix: { ob, cb, oB, cB }
-      });
-      throw new Error("AI_JSON_UNBALANCED");
+    ob = count(/{/g); cb = count(/}/g); oB = count(/\[/g); cB = count(/]/g);
+  }
+
+  // 4) si sigue desbalanceado: extractor por patrón de "exam"
+  if (ob !== cb || oB !== cB) {
+    const reExamBlock =
+      /\{\s*"exam"\s*:\s*\{\s*[\s\S]*?"questions"\s*:\s*\[[\s\S]*?\]\s*,\s*"answerSheet"\s*:\s*\[[\s\S]*?\]\s*\}\s*\}/i;
+
+    const m = (text || "").match(reExamBlock);
+    if (m && m[0]) {
+      t = removeTrailingCommas(m[0]);
+      ob = count(/{/g); cb = count(/}/g); oB = count(/\[/g); cB = count(/]/g);
     }
   }
 
-  // 4) intento directo
+  // 5) si AÚN está desbalanceado, log y error controlado
+  if (ob !== cb || oB !== cB) {
+    console.error("[EXAM][PARSE][UNBALANCED] counters:", {
+      ob, cb, oB, cB,
+      sampleHead: (t || "").slice(0, 500),
+      sampleTail: (t || "").slice(-500)
+    });
+    throw new Error("AI_JSON_UNBALANCED");
+  }
+
+  // 6) parseo: directo -> con trailing commas
   try {
     return JSON.parse(t);
   } catch (e1) {
-    // 5) remover comas colgantes y reintentar
     try {
       const fixed = removeTrailingCommas(t);
       return JSON.parse(fixed);
@@ -189,6 +222,7 @@ function safeJsonParseExam(text) {
     }
   }
 }
+
 
 /** Normaliza una pregunta: asegura keys A–D, arrays, y deriva answerKeys si faltan. */
 function normalizeExamQuestion(q, idx) {
