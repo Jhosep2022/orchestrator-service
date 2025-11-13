@@ -33,6 +33,18 @@ async function chatGemini(messages, { maxTokens = 2200 } = {}) {
   return text;
 }
 
+function safeJsonParse(text) {
+  try { return JSON.parse(text); } catch {}
+  const s = text.indexOf('{'); const e = text.lastIndexOf('}');
+  if (s >= 0 && e > s) { try { return JSON.parse(text.slice(s, e + 1)); } catch {} }
+  const fixed = text
+    .replace(/(\s"label")\s+"([^"]+)"/g, '$1: "$2"')
+    .replace(/(\s"id")\s+"([^"]+)"/g, '$1: "$2"')
+    .replace(/(\s"prompt")\s+"([^"]+)"/g, '$1: "$2"')
+    .replace(/(\s"title")\s+"([^"]+)"/g, '$1: "$2"');
+  return JSON.parse(fixed);
+}
+
 // ===== API pública idéntica a la de bedrock.js =====
 
 export async function generateOutline({ topic, level = "beginner", tags = [] }) {
@@ -117,10 +129,50 @@ Salida:
 }
 
 export async function generateExam({ course }) {
-  const user = `Genera examen final de 8-10 preguntas. Salida:
-{ "exam": { "id":"ex_1","title":"Examen final","questions":[{"id":"q1","prompt":"...","options":[{"key":"A","label":"...","isCorrect":true,"feedback":"..."}]}] } }`;
-  const text = await chatGemini([{ role: "user", content: user }], { maxTokens: 3000 });
-  return JSON.parse(text);
+  const sys = "Eres un generador de exámenes. Devuelve SOLO JSON válido.";
+  const user = `Genera un examen final de 8–10 preguntas multiopción (A–D) relacionado al curso.
+  FORMATO ESTRICTO (sin texto fuera del JSON):
+  {
+    "exam": {
+      "id": "ex_1",
+      "title": "Examen final",
+      "mode": "final",
+      "timeLimitMinutes": 0,
+      "questions": [
+        {
+          "id": "q1",
+          "position": 1,
+          "prompt": "string",
+          "options": [
+            { "key": "A", "label": "string", "isCorrect": false, "feedback": "string" },
+            { "key": "B", "label": "string", "isCorrect": false, "feedback": "string" },
+            { "key": "C", "label": "string", "isCorrect": true,  "feedback": "string" },
+            { "key": "D", "label": "string", "isCorrect": false, "feedback": "string" }
+          ],
+          "answerKeys": ["C"]  // incisos correctos
+        }
+      ],
+      "answerSheet": [
+        { "id": "q1", "answerKeys": ["C"] }
+      ]
+    }
+  }
+
+  Reglas:
+  - Usa sólo claves exactas: id,title,mode,timeLimitMinutes,questions,position,prompt,options,key,label,isCorrect,feedback,answerKeys,answerSheet.
+  - Escapa comillas internas correctamente.
+  - Español neutro, temática del curso.
+
+  Contexto (recortado):
+  ${JSON.stringify(course).slice(0, 3500)}`;
+
+    const text = await chatGemini(
+      [{ role: "system", content: sys }, { role: "user", content: user }],
+      { maxTokens: 2200 }
+    );
+
+    const json = safeJsonParse(text);
+    return json;
 }
 
 export async function generateResources({ course }) {
