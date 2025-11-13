@@ -1,4 +1,10 @@
-import { generateResources as aiGenerateResources } from "../ai/index.js";
+// src/tasks/persist-lessons.js
+import { BatchWriteCommand } from '@aws-sdk/lib-dynamodb';
+import { doc } from '../core/ddb.js';
+import { env } from '../core/env.js';
+
+const CHUNK = 25;
+const pad = (n, size) => String(n).padStart(size, '0');
 
 function resolveOutline(evt) {
   const o1 = evt?.outline;
@@ -8,92 +14,129 @@ function resolveOutline(evt) {
   return { course: null, modules: [] };
 }
 
-function kebab(s) {
-  return String(s || '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/(^-|-$)/g, '')
-    .slice(0, 60) || 'resource';
-}
-
-function looksUUID(s) {
-  return typeof s === 'string' && s.includes('-') && s.length >= 32;
+function pickLessonsArray(evt) {
+  const l1 = evt?.lessons?.lessons?.items;
+  if (Array.isArray(l1) && l1.length) return l1;
+  const l2 = evt?.lessons?.items;
+  if (Array.isArray(l2) && l2.length) return l2;
+  const l3 = evt?.lessons;
+  if (Array.isArray(l3) && l3.length) return l3;
+  return [];
 }
 
 export const handler = async (event) => {
+  const requestId = event?.requestId || 'no-request-id';
+
+  // Tablas desde env (permite fallback si definiste las vars directas)
+  const lessonsTable =
+    env.lessonsTable ||
+    process.env.LESSONS_TABLE_NAME ||
+    env.tableName || // si compartes una sola tabla wide
+    process.env.TABLE_NAME;
+
   const { course, modules } = resolveOutline(event);
-  const lessons = event?.lessons?.items || event?.lessons || [];
-  const coursePayload = {
-    ...course,
-    modules: modules || [],
-    lessons: Array.isArray(lessons) ? lessons : []
-  };
+  const courseId =
+    course?.id ||
+    event?.outline?.course?.id ||
+    event?.payload?.draftCourseId;
 
-  console.log('[RES][gen] course.id=', coursePayload?.id, 'mods=', (coursePayload.modules||[]).length, 'lessons=', (coursePayload.lessons||[]).length);
+  const finalLessons = pickLessonsArray(event); // <-- usa las lecciones con contenido
+  const moduleIdMap = event?.persistModules?.moduleIdMap || {}; // { m_1: <uuid>, ... }
 
-  let raw;
-  try {
-    raw = await aiGenerateResources({ course: coursePayload });
-  } catch (e) {
-    console.error('[RES][gen][ERR-IA]', e);
-    raw = null;
+  if (!lessonsTable) {
+    console.error('[LESSONS][ERR] Missing lessonsTable', { requestId, env });
+    throw new Error('MISSING_LESSONS_TABLE');
+  }
+  if (!courseId) {
+    console.error('[LESSONS][ERR] Missing courseId', { requestId });
+    throw new Error('MISSING_COURSE_ID');
+  }
+  if (!Array.isArray(finalLessons) || finalLessons.length === 0) {
+    console.warn('[LESSONS][WARN] No lessons to persist', { requestId });
+    return { ok: true, persisted: 0, courseId };
   }
 
-  const rawItems = raw?.resources?.items || raw?.resources || [];
-  let items = Array.isArray(rawItems) ? rawItems : [];
-  console.log('[RES][gen] IA items:', items.length);
+  // Posición del módulo para ordenar en GSI1SK
+  const modulePosById = new Map((modules || []).map(m => [m.id, Number(m.position) || 0]));
 
-  // Coerción de lessonId: si la IA puso "l_3", lo mapeamos al UUID por order
-  if (items.length > 0 && coursePayload.lessons.length > 0) {
-    const byOrder = new Map(
-      coursePayload.lessons.map(l => [Number(l.order), l.id])
-    );
+  // Normaliza cada lección y mapea moduleId (m_#) -> UUID real
+  const nowISO = new Date().toISOString();
+  const normalized = finalLessons.map((L, idx) => {
+    const oldModuleId = L.moduleId;                 // ej: "m_3"
+    const realModuleId = moduleIdMap[oldModuleId];  // ej: "da8c67..." (UUID)
+    const lessonId = L.lessonId || L.id;            // algunas IAs usan "id", nosotros guardamos "lessonId"
+    const order = Number(L.order ?? (idx + 1));
+    const modulePos = Number(modulePosById.get(oldModuleId) || 0);
 
-    items = items.map((r) => {
-      let lid = r.lessonId ?? r.lesson_id ?? null;
-      if (lid && !looksUUID(lid)) {
-        const m = /^l_(\d+)$/.exec(String(lid));
-        if (m) {
-          const order = Number(m[1]);
-          lid = byOrder.get(order) || null;
-        }
-      }
-      return { ...r, lessonId: lid };
+    if (!realModuleId) {
+      console.error('[LESSONS][ERR] Missing realModuleId', { requestId, oldModuleId, lessonId, title: L?.title });
+      throw new Error('MISSING_REAL_MODULE_ID');
+    }
+    if (!lessonId) {
+      console.error('[LESSONS][ERR] Missing lessonId', { requestId, L });
+      throw new Error('MISSING_LESSON_ID');
+    }
+
+    return {
+      // PK/SK para lectura por módulo y orden estable
+      PK: `MODULE#${realModuleId}`,
+      SK: `LESSON#${pad(order, 4)}#${lessonId}`,
+
+      // Tipo de entidad (útil para filtros)
+      etype: 'LESSON',
+
+      // GSI para listar por curso (IndexName: 'byCourse')
+      GSI1PK: `COURSE#${courseId}`,
+      GSI1SK: `M#${pad(modulePos, 5)}#L#${pad(order, 5)}#${lessonId}`,
+
+      // Datos de negocio
+      courseId,
+      moduleId: realModuleId,
+      lessonId,
+      title: L.title,
+      order,
+      durationMinutes: Number(L.durationMinutes ?? 0) || null,
+      contentMD: L.contentMD ?? '',
+      contentUrl: L.contentUrl ?? '',
+      summary: L.summary ?? null,
+      tips: Array.isArray(L.tips) ? L.tips : [],
+      miniChallenge: L.miniChallenge ?? null,
+
+      createdAt: nowISO,
+      updatedAt: nowISO,
+    };
+  });
+
+  // Escribe en lotes de 25
+  const chunks = [];
+  for (let i = 0; i < normalized.length; i += CHUNK) {
+    chunks.push(normalized.slice(i, i + CHUNK));
+  }
+
+  let total = 0;
+  for (const batch of chunks) {
+    const cmd = new BatchWriteCommand({
+      RequestItems: {
+        [lessonsTable]: batch.map(Item => ({ PutRequest: { Item } })),
+      },
     });
+
+    const res = await doc.send(cmd);
+    const unprocessed = res?.UnprocessedItems?.[lessonsTable]?.length || 0;
+    total += (batch.length - unprocessed);
+
+    if (unprocessed > 0) {
+      console.warn('[LESSONS][WARN] UnprocessedItems', { requestId, unprocessed });
+    }
   }
 
-  // Fallback si IA devuelve 0
-  if (items.length === 0) {
-    const bases = ['guia-intro', 'practica-basica', 'video-resumen', 'cheatsheet-poo'];
-    items = bases.map((base, i) => ({
-      slug: base,
-      title: ['Guía Introductoria', 'Práctica Básica', 'Video Resumen', 'Cheatsheet POO'][i] || `Recurso ${i+1}`,
-      resourceType: ['article', 'practice', 'video', 'cheatsheet'][i] || 'article',
-      durationMinutes: [7,12,6,5][i] || 5,
-      description: 'Recurso autogenerado.',
-      overview: null,
-      actionLabel: 'Abrir',
-      actionUrl: null,
-      tags: ['poo','python'],
-      lessonId: coursePayload.lessons?.[i]?.id ?? null
-    }));
-    console.warn('[RES][gen] Aplicado Fallback de recursos:', items.length);
-  }
+  console.info('[LESSONS][OK] Persisted lessons', {
+    requestId, courseId, total, table: lessonsTable,
+  });
 
-  // Normalización final
-  const normalized = items.map((r, idx) => ({
-    slug: kebab(r.slug || r.title || `resource-${idx + 1}`),
-    title: r.title || `Recurso ${idx + 1}`,
-    resourceType: (r.resourceType || r.resource_type || "article").toLowerCase(),
-    durationMinutes: Number(r.durationMinutes ?? r.duration_minutes ?? 5),
-    description: r.description ?? "",
-    overview: r.overview ?? "",
-    actionLabel: r.actionLabel ?? r.action_label ?? "Ir al recurso",
-    actionUrl: r.actionUrl ?? r.action_url ?? null,
-    tags: Array.isArray(r.tags) ? r.tags : [],
-    lessonId: r.lessonId ?? r.lesson_id ?? null,
-  }));
-
-  console.log('[RES][gen] normalized:', normalized.length);
-  return { resources: { items: normalized } };
+  return {
+    ok: true,
+    persisted: total,
+    courseId,
+  };
 };
