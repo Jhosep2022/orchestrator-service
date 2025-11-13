@@ -145,12 +145,11 @@ export async function generateLessons({ course }) {
 
 
 // src/ai/providers/gemini.js
-function safeJsonParseExam(text) {
+function safeJsonParseExam(text, ctx) {
   const raw = String(text ?? "");
-  console.log("[EXAM][RAW][len]", raw.length, "head:", raw.slice(0, 500));
+  log(ctx, "log", "EXAM_RAW", { len: raw.length, head: head(raw), tail: tail(raw) });
 
-  // Helpers
-  const stripCodeFences = (s="") =>
+  const stripFences = (s="") =>
     s.replace(/```json\s*([\s\S]*?)```/gi, "$1")
      .replace(/```\s*([\s\S]*?)```/g, "$1");
   const removeInvisible = (s="") =>
@@ -167,19 +166,14 @@ function safeJsonParseExam(text) {
   };
   const count = (s,re) => (s.match(re) || []).length;
 
-  // Limpiezas iniciales
-  let t = removeInvisible(stripCodeFences(raw));
-  t = sliceOuterObject(t);
-
+  let t = sliceOuterObject(removeInvisible(stripFences(raw)));
   let ob = count(t, /{/g), cb = count(t, /}/g), oB = count(t, /\[/g), cB = count(t, /]/g);
 
-  // Primer intento de balanceo simple
   if (ob !== cb || oB !== cB) {
     t = removeTrailingCommas(sliceOuterObject(t));
     ob = count(t, /{/g); cb = count(t, /}/g); oB = count(t, /\[/g); cB = count(t, /]/g);
   }
 
-  // Extractor por patrón si sigue mal
   if (ob !== cb || oB !== cB) {
     const reExamBlock =
       /\{\s*"exam"\s*:\s*\{\s*[\s\S]*?"questions"\s*:\s*\[[\s\S]*?\][\s\S]*?\}\s*\}/i;
@@ -191,18 +185,17 @@ function safeJsonParseExam(text) {
   }
 
   if (ob !== cb || oB !== cB) {
-    console.error("[EXAM][PARSE][UNBALANCED]", { ob, cb, oB, cB, head: t.slice(0, 400), tail: t.slice(-400) });
+    log(ctx, "error", "EXAM_UNBALANCED", { ob, cb, oB, cB, head: head(t), tail: tail(t) });
     throw new Error("AI_JSON_UNBALANCED");
   }
 
-  // Parse directo + retry sin comas colgantes
   try {
     return JSON.parse(t);
   } catch {
     try {
-      return JSON.parse(removeTrailingCommas(t));
+      return JSON.parse(t.replace(/,\s*([}\]])/g, "$1"));
     } catch (e2) {
-      console.error("[EXAM][PARSE][FAIL] sample:", t.slice(0, 800));
+      log(ctx, "error", "EXAM_PARSE_FAIL", { sampleHead: head(t, 800), msg: e2?.message });
       throw new Error("AI_JSON_PARSE_ERROR");
     }
   }
@@ -234,54 +227,24 @@ function normalizeExamQuestion(q, idx) {
   };
 }
 
-export async function generateExam({ course }) {
+
+export async function generateExam({ course, ctx = {} }) {
   const sys = "Eres un generador de exámenes. Devuelve SOLO JSON válido.";
   const user = `Genera un examen final de 8–10 preguntas multiopción (A–D) relacionado al curso.
-  FORMATO ESTRICTO (sin texto fuera del JSON):
-  {
-    "exam": {
-      "id": "ex_1",
-      "title": "Examen final",
-      "mode": "final",
-      "timeLimitMinutes": 0,
-      "questions": [
-        {
-          "id": "q1",
-          "position": 1,
-          "prompt": "string",
-          "options": [
-            { "key": "A", "label": "string", "isCorrect": false, "feedback": "string" },
-            { "key": "B", "label": "string", "isCorrect": false, "feedback": "string" },
-            { "key": "C", "label": "string", "isCorrect": true,  "feedback": "string" },
-            { "key": "D", "label": "string", "isCorrect": false, "feedback": "string" }
-          ],
-          "answerKeys": ["C"]
-        }
-      ],
-      "answerSheet": [
-        { "id": "q1", "answerKeys": ["C"] }
-      ]
-    }
-  }
-
-  Reglas:
-  - Usa solo las claves: id,title,mode,timeLimitMinutes,questions,position,prompt,options,key,label,isCorrect,feedback,answerKeys,answerSheet.
-  - No incluyas ningún texto fuera del JSON.
-  - Escapa comillas internas correctamente.
-  - Español neutro, temática del curso.
-
-  Contexto (recortado):
+  FORMATO ESTRICTO...
+  Contexto:
   ${JSON.stringify(course).slice(0, 3500)}`;
 
   const text = await chatGemini(
     [{ role: "system", content: sys }, { role: "user", content: user }],
-    { maxTokens: 2200 }
+    { maxTokens: 2200, ctx }
   );
 
-  // Log del tamaño & cabeza del payload ya lo hace safeJsonParseExam
-  const json = safeJsonParseExam(text);
+  const json = safeJsonParseExam(text, ctx);
+  log(ctx, "log", "EXAM_JSON_OK", { questions: json?.exam?.questions?.length ?? 0 });
   return json;
 }
+
 
 export async function generateResources({ course }) {
   const sys = "Eres un generador de recursos complementarios. que busca referencias en la web. Devuelve SOLO JSON válido.";
@@ -318,3 +281,6 @@ ${JSON.stringify(course).slice(0, 8000)}`;
   );
   return JSON.parse(text);
 }
+
+
+export { normalizeExamQuestion };
