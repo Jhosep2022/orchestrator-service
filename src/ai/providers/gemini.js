@@ -210,6 +210,25 @@ function safeJsonParseExam(text, ctx = {}) {
     }
   }
 
+  // --- NUEVO: Curación si sigue desbalanceado (probable truncación al final)
+  if (ob !== cb || oB !== cB) {
+    // Si el último char termina en coma, quítala
+    t = t.replace(/,\s*$/g, "");
+
+    // Cierra arreglos primero, luego objetos
+    const needCloseBrackets = Math.max(0, oB - cB); // arrays
+    const needCloseBraces   = Math.max(0, ob - cb); // objetos
+
+    if (needCloseBrackets > 0 || needCloseBraces > 0) {
+      const closeBrackets = "]".repeat(needCloseBrackets);
+      const closeBraces   = "}".repeat(needCloseBraces);
+      t = removeTrailing(t) + closeBrackets + closeBraces;
+
+      // Recontar
+      ob = count(t, /{/g); cb = count(t, /}/g); oB = count(t, /\[/g); cB = count(t, /]/g);
+    }
+  }
+
   if (ob !== cb || oB !== cB) {
     log(ctx, "error", "EXAM_UNBALANCED", { ob, cb, oB, cB, head: head(t), tail: tail(t) });
     throw new Error("AI_JSON_UNBALANCED");
@@ -274,10 +293,10 @@ export async function generateExam({ course, ctx = {} }) {
           "position": 1,
           "prompt": "string",
           "options": [
-            { "key": "A", "label": "string", "isCorrect": false, "feedback": "string" },
-            { "key": "B", "label": "string", "isCorrect": false, "feedback": "string" },
-            { "key": "C", "label": "string", "isCorrect": true,  "feedback": "string" },
-            { "key": "D", "label": "string", "isCorrect": false, "feedback": "string" }
+            { "key": "A", "label": "string", "isCorrect": false, "feedback": "frase corta (<= 16 palabras)" },
+            { "key": "B", "label": "string", "isCorrect": false, "feedback": "frase corta (<= 16 palabras)" },
+            { "key": "C", "label": "string", "isCorrect": true,  "feedback": "frase corta (<= 16 palabras)" },
+            { "key": "D", "label": "string", "isCorrect": false, "feedback": "frase corta (<= 16 palabras)" }
           ],
           "answerKeys": ["C"]
         }
@@ -290,16 +309,17 @@ export async function generateExam({ course, ctx = {} }) {
 
   Reglas:
   - Usa solo las claves: id,title,mode,timeLimitMinutes,questions,position,prompt,options,key,label,isCorrect,feedback,answerKeys,answerSheet.
-  - No incluyas ningún texto fuera del JSON.
-  - Escapa comillas internas correctamente.
+  - NO incluyas nada fuera del JSON. No fences. No comentarios.
+  - Limita cada "feedback" a una frase corta (máx. ~16 palabras) para reducir tamaño.
   - Español neutro, temática del curso.
 
   Contexto (recortado):
   ${JSON.stringify(course).slice(0, 3500)}`;
 
+  // Subimos el tope para mitigar truncados; ajusta según tu modelo/costo.
   const text = await chatGemini(
     [{ role: "system", content: sys }, { role: "user", content: user }],
-    { maxTokens: 2200 }
+    { maxTokens: 3000 }
   );
 
   const json = safeJsonParseExam(text, ctx);
