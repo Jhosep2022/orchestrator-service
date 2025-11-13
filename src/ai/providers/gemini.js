@@ -144,80 +144,65 @@ export async function generateLessons({ course }) {
 }
 
 
+// src/ai/providers/gemini.js
 function safeJsonParseExam(text) {
-  // 1) logging preliminar para CloudWatch
-  const len = (text || "").length;
-  console.log(`[EXAM][RAW][len=${len}] head=`, (text || "").slice(0, 600));
+  const raw = String(text ?? "");
+  console.log("[EXAM][RAW][len]", raw.length, "head:", raw.slice(0, 500));
 
-  // --- helpers locales ---
-  const stripCodeFences = (s = "") =>
+  // Helpers
+  const stripCodeFences = (s="") =>
     s.replace(/```json\s*([\s\S]*?)```/gi, "$1")
      .replace(/```\s*([\s\S]*?)```/g, "$1");
-
-  const dropAfterLastBrace = (s = "") => {
-    const start = s.indexOf("{");
-    const end = s.lastIndexOf("}");
-    if (start === -1 || end === -1 || end <= start) return s;
-    return s.slice(start, end + 1);
-  };
-
-  const removeTrailingCommas = (s = "") =>
+  const removeInvisible = (s="") =>
+    s.replace(/^\uFEFF/, "")
+     .replace(/\u200B|\u200C|\u200D/g, "")
+     .replace(/\u2028|\u2029/g, " ");
+  const removeTrailingCommas = (s="") =>
     s.replace(/,\s*([}\]])/g, "$1");
+  const sliceOuterObject = (s="") => {
+    const a = s.indexOf("{");
+    const b = s.lastIndexOf("}");
+    if (a === -1 || b === -1 || b <= a) return s;
+    return s.slice(a, b + 1);
+  };
+  const count = (s,re) => (s.match(re) || []).length;
 
-  const removeInvisible = (s = "") =>
-    s
-      .replace(/^\uFEFF/, "")    // BOM
-      .replace(/\u200B/g, "")    // ZWSP
-      .replace(/\u200C/g, "")    // ZWNJ
-      .replace(/\u200D/g, "")    // ZWJ
-      .replace(/\u2028|\u2029/g, " "); // separadores de línea Unicode
+  // Limpiezas iniciales
+  let t = removeInvisible(stripCodeFences(raw));
+  t = sliceOuterObject(t);
 
-  // 2) saneo básico
-  let t = removeInvisible(text || "");
-  t = stripCodeFences(t);
-  t = dropAfterLastBrace(t);
+  let ob = count(t, /{/g), cb = count(t, /}/g), oB = count(t, /\[/g), cB = count(t, /]/g);
 
-  // 3) chequeo balanceo simple de llaves/corchetes
-  const count = (re) => (t.match(re) || []).length;
-  let ob = count(/{/g), cb = count(/}/g), oB = count(/\[/g), cB = count(/]/g);
-
+  // Primer intento de balanceo simple
   if (ob !== cb || oB !== cB) {
-    // intento 1: limpiar comas colgantes + recortar al último }
-    t = removeTrailingCommas(dropAfterLastBrace(t));
-    ob = count(/{/g); cb = count(/}/g); oB = count(/\[/g); cB = count(/]/g);
+    t = removeTrailingCommas(sliceOuterObject(t));
+    ob = count(t, /{/g); cb = count(t, /}/g); oB = count(t, /\[/g); cB = count(t, /]/g);
   }
 
-  // 4) si sigue desbalanceado: extractor por patrón de "exam"
+  // Extractor por patrón si sigue mal
   if (ob !== cb || oB !== cB) {
     const reExamBlock =
-      /\{\s*"exam"\s*:\s*\{\s*[\s\S]*?"questions"\s*:\s*\[[\s\S]*?\]\s*,\s*"answerSheet"\s*:\s*\[[\s\S]*?\]\s*\}\s*\}/i;
-
-    const m = (text || "").match(reExamBlock);
+      /\{\s*"exam"\s*:\s*\{\s*[\s\S]*?"questions"\s*:\s*\[[\s\S]*?\][\s\S]*?\}\s*\}/i;
+    const m = raw.match(reExamBlock);
     if (m && m[0]) {
       t = removeTrailingCommas(m[0]);
-      ob = count(/{/g); cb = count(/}/g); oB = count(/\[/g); cB = count(/]/g);
+      ob = count(t, /{/g); cb = count(t, /}/g); oB = count(t, /\[/g); cB = count(t, /]/g);
     }
   }
 
-  // 5) si AÚN está desbalanceado, log y error controlado
   if (ob !== cb || oB !== cB) {
-    console.error("[EXAM][PARSE][UNBALANCED] counters:", {
-      ob, cb, oB, cB,
-      sampleHead: (t || "").slice(0, 500),
-      sampleTail: (t || "").slice(-500)
-    });
+    console.error("[EXAM][PARSE][UNBALANCED]", { ob, cb, oB, cB, head: t.slice(0, 400), tail: t.slice(-400) });
     throw new Error("AI_JSON_UNBALANCED");
   }
 
-  // 6) parseo: directo -> con trailing commas
+  // Parse directo + retry sin comas colgantes
   try {
     return JSON.parse(t);
-  } catch (e1) {
+  } catch {
     try {
-      const fixed = removeTrailingCommas(t);
-      return JSON.parse(fixed);
+      return JSON.parse(removeTrailingCommas(t));
     } catch (e2) {
-      console.error("[EXAM][PARSE][FAIL] sample:", (t || "").slice(0, 800));
+      console.error("[EXAM][PARSE][FAIL] sample:", t.slice(0, 800));
       throw new Error("AI_JSON_PARSE_ERROR");
     }
   }
