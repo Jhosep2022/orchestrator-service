@@ -1,5 +1,5 @@
 {
-    "Comment": "Course build orchestrator",
+    "Comment": "Course build orchestrator (sin quizzes, sólo examen)",
     "StartAt": "GenerateOutline",
     "States": {
         "GenerateOutline": {
@@ -41,18 +41,6 @@
             "Type": "Task",
             "Resource": "${PersistLessonsArn}",
             "ResultPath": "$.persistLessons",
-            "Next": "GenerateQuizzes"
-        },
-        "GenerateQuizzes": {
-            "Type": "Task",
-            "Resource": "${GenerateQuizzesArn}",
-            "ResultPath": "$.quizzes",
-            "Next": "PersistQuizzes"
-        },
-        "PersistQuizzes": {
-            "Type": "Task",
-            "Resource": "${PersistQuizzesArn}",
-            "ResultPath": "$.persistQuizzes",
             "Next": "GenerateExam"
         },
         "GenerateExam": {
