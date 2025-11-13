@@ -2,6 +2,29 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { env } from "../../core/env.js";
 
+/* =========================
+   Helpers de logging & utils
+   ========================= */
+function head(s = "", n = 400) {
+  try { return String(s).slice(0, n); } catch { return ""; }
+}
+function tail(s = "", n = 400) {
+  try { const t = String(s); return t.slice(Math.max(0, t.length - n)); } catch { return ""; }
+}
+function safeStringify(obj) {
+  try { return JSON.stringify(obj); } catch { return String(obj); }
+}
+/** log(ctx, level, tag, data) -> usa console[level] con contexto seguro */
+function log(ctx = {}, level = "log", tag = "LOG", data = {}) {
+  const rid = ctx.requestId || ctx.rid || ctx.reqId || null;
+  const payload = { tag, ...(rid ? { requestId: rid } : {}), ...data };
+  const fn = (console[level] || console.log).bind(console);
+  try { fn(`[AI] ${tag}`, payload); } catch { try { fn(`[AI] ${tag} ${safeStringify(payload)}`); } catch {} }
+}
+
+/* =========================
+   Utilidades JSON comunes
+   ========================= */
 /** Convierte [{role, content}] a systemInstruction + prompt lineal */
 function flattenMessages(messages) {
   const sys = messages.find(m => m.role === "system")?.content || null;
@@ -21,9 +44,7 @@ async function chatGemini(messages, { maxTokens = 2200 } = {}) {
     model: env.geminiModelId || "gemini-2.5-flash-lite",
     ...(sys ? { systemInstruction: sys } : {}),
     generationConfig: {
-      // Mismo concepto que max_tokens
       maxOutputTokens: maxTokens,
-      // Pedimos JSON crudo
       responseMimeType: "application/json"
     }
   });
@@ -45,12 +66,10 @@ function dropAfterLastBrace(s = "") {
   return s.slice(start, end + 1);
 }
 
-
 function removeTrailingCommas(s = "") {
   // elimina comas colgantes en objetos y arrays: {...,} o [...,]
   return s.replace(/,\s*([}\]])/g, "$1");
 }
-
 
 function safeJsonParse(text) {
   try { return JSON.parse(text); } catch {}
@@ -64,8 +83,9 @@ function safeJsonParse(text) {
   return JSON.parse(fixed);
 }
 
-// ===== API pública idéntica a la de bedrock.js =====
-
+/* =========================
+   Generación de Outline
+   ========================= */
 export async function generateOutline({ topic, level = "beginner", tags = [] }) {
   const sys = "Eres un generador de planes de curso. Devuelve SOLO JSON válido.";
   const user = `Tema: ${topic}\nNivel: ${level}\nEtiquetas: ${tags.join(", ")}
@@ -84,6 +104,9 @@ Estructura JSON:
   return JSON.parse(text);
 }
 
+/* =========================
+   Generación de Lecciones
+   ========================= */
 export async function generateLessons({ course }) {
   const sys = "Eres un generador de contenido de lecciones para un e-learning de PROGRAMACIÓN. Devuelve SOLO JSON válido (sin fences).";
 
@@ -143,43 +166,46 @@ export async function generateLessons({ course }) {
   return json;
 }
 
-
-// src/ai/providers/gemini.js
-function safeJsonParseExam(text, ctx) {
+/* =========================
+   PARSER para EXAM (robusto)
+   ========================= */
+function safeJsonParseExam(text, ctx = {}) {
   const raw = String(text ?? "");
   log(ctx, "log", "EXAM_RAW", { len: raw.length, head: head(raw), tail: tail(raw) });
 
-  const stripFences = (s="") =>
+  // Helpers locales de limpieza
+  const stripFences = (s = "") =>
     s.replace(/```json\s*([\s\S]*?)```/gi, "$1")
      .replace(/```\s*([\s\S]*?)```/g, "$1");
-  const removeInvisible = (s="") =>
+  const removeInvisible = (s = "") =>
     s.replace(/^\uFEFF/, "")
      .replace(/\u200B|\u200C|\u200D/g, "")
      .replace(/\u2028|\u2029/g, " ");
-  const removeTrailingCommas = (s="") =>
-    s.replace(/,\s*([}\]])/g, "$1");
-  const sliceOuterObject = (s="") => {
+  const removeTrailing = (s = "") => s.replace(/,\s*([}\]])/g, "$1");
+  const sliceOuterObject = (s = "") => {
     const a = s.indexOf("{");
     const b = s.lastIndexOf("}");
     if (a === -1 || b === -1 || b <= a) return s;
     return s.slice(a, b + 1);
   };
-  const count = (s,re) => (s.match(re) || []).length;
+  const count = (s, re) => (s.match(re) || []).length;
 
+  // Limpiezas iniciales
   let t = sliceOuterObject(removeInvisible(stripFences(raw)));
   let ob = count(t, /{/g), cb = count(t, /}/g), oB = count(t, /\[/g), cB = count(t, /]/g);
 
+  // Primer reintento simple
   if (ob !== cb || oB !== cB) {
-    t = removeTrailingCommas(sliceOuterObject(t));
+    t = removeTrailing(sliceOuterObject(t));
     ob = count(t, /{/g); cb = count(t, /}/g); oB = count(t, /\[/g); cB = count(t, /]/g);
   }
 
+  // Extracción por patrón si sigue desbalanceado
   if (ob !== cb || oB !== cB) {
-    const reExamBlock =
-      /\{\s*"exam"\s*:\s*\{\s*[\s\S]*?"questions"\s*:\s*\[[\s\S]*?\][\s\S]*?\}\s*\}/i;
+    const reExamBlock = /\{\s*"exam"\s*:\s*\{\s*[\s\S]*?"questions"\s*:\s*\[[\s\S]*?\][\s\S]*?\}\s*\}/i;
     const m = raw.match(reExamBlock);
     if (m && m[0]) {
-      t = removeTrailingCommas(m[0]);
+      t = removeTrailing(m[0]);
       ob = count(t, /{/g); cb = count(t, /}/g); oB = count(t, /\[/g); cB = count(t, /]/g);
     }
   }
@@ -189,18 +215,20 @@ function safeJsonParseExam(text, ctx) {
     throw new Error("AI_JSON_UNBALANCED");
   }
 
+  // Parse directo + retry sin comas colgantes
   try {
-    return JSON.parse(t);
+    const parsed = JSON.parse(t);
+    return parsed;
   } catch {
     try {
-      return JSON.parse(t.replace(/,\s*([}\]])/g, "$1"));
+      const parsed = JSON.parse(removeTrailing(t));
+      return parsed;
     } catch (e2) {
       log(ctx, "error", "EXAM_PARSE_FAIL", { sampleHead: head(t, 800), msg: e2?.message });
       throw new Error("AI_JSON_PARSE_ERROR");
     }
   }
 }
-
 
 /** Normaliza una pregunta: asegura keys A–D, arrays, y deriva answerKeys si faltan. */
 function normalizeExamQuestion(q, idx) {
@@ -227,17 +255,51 @@ function normalizeExamQuestion(q, idx) {
   };
 }
 
-
+/* =========================
+   Generación de EXAM
+   ========================= */
 export async function generateExam({ course, ctx = {} }) {
   const sys = "Eres un generador de exámenes. Devuelve SOLO JSON válido.";
   const user = `Genera un examen final de 8–10 preguntas multiopción (A–D) relacionado al curso.
-  FORMATO ESTRICTO...
-  Contexto:
+  FORMATO ESTRICTO (sin texto fuera del JSON):
+  {
+    "exam": {
+      "id": "ex_1",
+      "title": "Examen final",
+      "mode": "final",
+      "timeLimitMinutes": 0,
+      "questions": [
+        {
+          "id": "q1",
+          "position": 1,
+          "prompt": "string",
+          "options": [
+            { "key": "A", "label": "string", "isCorrect": false, "feedback": "string" },
+            { "key": "B", "label": "string", "isCorrect": false, "feedback": "string" },
+            { "key": "C", "label": "string", "isCorrect": true,  "feedback": "string" },
+            { "key": "D", "label": "string", "isCorrect": false, "feedback": "string" }
+          ],
+          "answerKeys": ["C"]
+        }
+      ],
+      "answerSheet": [
+        { "id": "q1", "answerKeys": ["C"] }
+      ]
+    }
+  }
+
+  Reglas:
+  - Usa solo las claves: id,title,mode,timeLimitMinutes,questions,position,prompt,options,key,label,isCorrect,feedback,answerKeys,answerSheet.
+  - No incluyas ningún texto fuera del JSON.
+  - Escapa comillas internas correctamente.
+  - Español neutro, temática del curso.
+
+  Contexto (recortado):
   ${JSON.stringify(course).slice(0, 3500)}`;
 
   const text = await chatGemini(
     [{ role: "system", content: sys }, { role: "user", content: user }],
-    { maxTokens: 2200, ctx }
+    { maxTokens: 2200 }
   );
 
   const json = safeJsonParseExam(text, ctx);
@@ -245,7 +307,9 @@ export async function generateExam({ course, ctx = {} }) {
   return json;
 }
 
-
+/* =========================
+   Generación de Recursos
+   ========================= */
 export async function generateResources({ course }) {
   const sys = "Eres un generador de recursos complementarios. que busca referencias en la web. Devuelve SOLO JSON válido.";
   const user = `Genera recursos variados (article|practice|video|cheatsheet) para el curso tienes que buscarlo en la web no quiero inventados.
@@ -281,6 +345,5 @@ ${JSON.stringify(course).slice(0, 8000)}`;
   );
   return JSON.parse(text);
 }
-
 
 export { normalizeExamQuestion };
