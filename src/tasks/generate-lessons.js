@@ -1,89 +1,124 @@
 // src/tasks/generate-lessons.js
 import { generateLessons as aiGenerateLessons } from "../ai/index.js";
+import { randomUUID } from "crypto";
 
-/** De modules + (opcional) lessons predefinidas armamos un esqueleto mínimo */
-function buildLessonSkeleton(outline) {
-  const mods = Array.isArray(outline?.modules) ? outline.modules : [];
-  const pre  = outline?.lessons?.items || outline?.lessons || [];
+/** Heurística simple para detectar UUID */
+function looksUUID(s) {
+  return typeof s === "string" && s.includes("-") && s.length >= 32;
+}
 
-  // Si ya vienen lessons en outline, respétalas
-  if (Array.isArray(pre) && pre.length > 0) return pre.map((l, i) => ({
-    id: l.id || `l_${i + 1}`,
-    moduleId: l.moduleId,
-    title: l.title || `Lección ${i + 1}`,
-    durationMinutes: Number(l.durationMinutes ?? 10),
-    order: Number(l.order ?? i + 1)
-  }));
-
-  // Si no, construimos 2 por módulo como placeholder
+/** Construye esqueleto: 2 lecciones por módulo, usando moduleId UUID y ids UUID para lessons */
+function buildLessonSkeleton(modules, moduleIdMap) {
   const out = [];
   let order = 1;
-  for (const m of mods) {
+
+  for (const m of Array.isArray(modules) ? modules : []) {
+    const oldMid = m.id;                       // p.ej. "m_1"
+    const uuidMid = moduleIdMap?.[oldMid] || oldMid; // UUID pasado por PersistModules
+
     out.push({
-      id: `l_${order}`, moduleId: m.id, title: `Introducción: ${m.title}`,
-      durationMinutes: 10, order: order++
+      id: randomUUID(),
+      moduleId: uuidMid,
+      title: `Introducción: ${m.title}`,
+      durationMinutes: 10,
+      order: order++,
     });
+
     out.push({
-      id: `l_${order}`, moduleId: m.id, title: `Práctica: ${m.title}`,
-      durationMinutes: 12, order: order++
+      id: randomUUID(),
+      moduleId: uuidMid,
+      title: `Práctica: ${m.title}`,
+      durationMinutes: 12,
+      order: order++,
     });
   }
   return out;
 }
 
 export const handler = async (event) => {
+  // outline puede venir en $.outline o $.outline.outline según el orquestador
   const outline = event?.outline?.outline || event?.outline || {};
-  const course  = {
+  const modules = outline?.modules || [];
+
+  // mapping que devuelve PersistModules: { "m_1": "<uuid>", ... }
+  const moduleIdMap = event?.persistModules?.moduleIdMap || {};
+
+  // Si el outline ya trae lessons, respétalas PERO normaliza a UUID
+  const pre = outline?.lessons?.items || outline?.lessons || [];
+  let baseLessons = [];
+  if (Array.isArray(pre) && pre.length > 0) {
+    baseLessons = pre.map((l, i) => {
+      const coercedMid = moduleIdMap?.[l.moduleId] || l.moduleId;
+      return {
+        id: looksUUID(l.id) ? l.id : randomUUID(),
+        moduleId: coercedMid,
+        title: l.title || `Lección ${i + 1}`,
+        durationMinutes: Number(l.durationMinutes ?? 10),
+        order: Number(l.order ?? i + 1),
+      };
+    });
+  } else {
+    // Esqueleto 2 por módulo con UUIDs
+    baseLessons = buildLessonSkeleton(modules, moduleIdMap);
+  }
+
+  // Armamos el payload para IA con módulos ya mapeados a UUID
+  const course = {
     ...outline?.course,
-    modules: outline?.modules || [],
-    // pasamos un esqueleto para que la IA sepa “cuántas” y “cuáles”
-    lessons: buildLessonSkeleton(outline)
+    modules: modules.map((m) => ({
+      ...m,
+      id: moduleIdMap?.[m.id] || m.id, // forzamos UUID en moduleId dentro del prompt
+    })),
+    lessons: baseLessons,
   };
 
-  // 1) Pedimos a la IA con wrapper { lessons: { items: [...] } }
+  // 1) Llamada a IA
   let aiJson;
   try {
     aiJson = await aiGenerateLessons({ course });
   } catch (e) {
-    console.error('[LESSONS][gen][ERR-IA]', e);
+    console.error("[LESSONS][gen][ERR-IA]", e);
     aiJson = null;
   }
 
   // 2) Normalizamos posibles formas
-  const aiItems =
-    aiJson?.lessons?.items ||
-    aiJson?.lessons ||
-    [];
-
-  // 3) Validación dura: si viene vacío, hacemos fallback con el esqueleto
+  const aiItems = aiJson?.lessons?.items || aiJson?.lessons || [];
   let items = Array.isArray(aiItems) ? aiItems : [];
+
+  // 3) Si IA devuelve vacío, fallback con baseLessons
   if (items.length === 0) {
-    console.warn('[LESSONS][gen] IA devolvió vacío; aplicando Fallback.');
-    items = course.lessons.map((l) => ({
-      id: l.id,
-      moduleId: l.moduleId,
-      title: l.title,
-      durationMinutes: Number(l.durationMinutes ?? 10),
-      order: Number(l.order ?? 1),
+    console.warn("[LESSONS][gen] IA devolvió vacío; aplicando Fallback.");
+    items = baseLessons.map((l) => ({
+      ...l,
       contentMD: `# ${l.title}\n\nContenido en preparación.`,
       tips: [],
-      miniChallenge: null
+      miniChallenge: null,
     }));
   }
 
-  // 4) Saneamos tipos/campos finales
-  const normalized = items.map((l, idx) => ({
-    id: l.id || `l_${idx + 1}`,
-    moduleId: l.moduleId,
-    title: l.title || `Lección ${idx + 1}`,
-    durationMinutes: Number(l.durationMinutes ?? 10),
-    order: Number(l.order ?? idx + 1),
-    contentMD: l.contentMD ?? '',
-    summary: l.summary ?? null,
-    tips: Array.isArray(l.tips) ? l.tips : [],
-    miniChallenge: l.miniChallenge ?? null
-  }));
+  // 4) Normalización final: forzar UUID de lesson.id y moduleId en UUID
+  const normalized = items.map((l, idx) => {
+    // Corrige moduleId si IA devolvió "m_#"
+    const oldMid = l.moduleId;
+    const coercedModuleId = moduleIdMap?.[oldMid] || oldMid;
 
-  console.log('[LESSONS][gen] total:', normalized.length);
+    // Asegura UUID de lesson.id
+    const finalId = looksUUID(l.id) ? l.id : randomUUID();
+
+    return {
+      id: finalId,
+      moduleId: coercedModuleId,
+      title: l.title || `Lección ${idx + 1}`,
+      durationMinutes: Number(l.durationMinutes ?? 10),
+      order: Number(l.order ?? idx + 1),
+      contentMD: l.contentMD ?? "",
+      summary: l.summary ?? null,
+      tips: Array.isArray(l.tips) ? l.tips : [],
+      miniChallenge: l.miniChallenge ?? null,
+    };
+  });
+
+  console.log("[LESSONS][gen] total:", normalized.length);
+  // Devolvemos ya con IDs en UUID para que PersistLessons/grupo siguiente lo guarde tal cual
   return { lessons: { items: normalized } };
 };

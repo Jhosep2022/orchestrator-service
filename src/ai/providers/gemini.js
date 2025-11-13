@@ -104,7 +104,7 @@ export async function generateExam({ course }) {
 }
 
 export async function generateResources({ course }) {
-  const sys = "Eres un generador de recursos complementarios. Devuelve SOLO JSON válido.";
+  const sys = "Eres un generador de recursos complementarios. que busca referencias en la web. Devuelve SOLO JSON válido.";
   const user = `Genera recursos variados (article|practice|video|cheatsheet) para el curso.
 DEVUELVE ESTE FORMATO ESTRICTO (sin comentarios, sin claves extra, sin fences):
 {
