@@ -33,6 +33,25 @@ async function chatGemini(messages, { maxTokens = 2200 } = {}) {
   return text;
 }
 
+function stripCodeFences(s = "") {
+  // quita ```json ... ``` o ``` ... ```
+  return s.replace(/```json\s*([\s\S]*?)```/gi, "$1").replace(/```\s*([\s\S]*?)```/g, "$1");
+}
+
+function dropAfterLastBrace(s = "") {
+  const start = s.indexOf("{");
+  const end = s.lastIndexOf("}");
+  if (start === -1 || end === -1 || end <= start) return s;
+  return s.slice(start, end + 1);
+}
+
+
+function removeTrailingCommas(s = "") {
+  // elimina comas colgantes en objetos y arrays: {...,} o [...,]
+  return s.replace(/,\s*([}\]])/g, "$1");
+}
+
+
 function safeJsonParse(text) {
   try { return JSON.parse(text); } catch {}
   const s = text.indexOf('{'); const e = text.lastIndexOf('}');
@@ -119,45 +138,50 @@ export async function generateLessons({ course }) {
 }
 
 
-function safeJsonParseExam(raw) {
-  if (raw == null) throw new Error("AI_EMPTY_RESPONSE");
-  let text = String(raw);
+function safeJsonParseExam(text) {
+  // 1) logging preliminar para CloudWatch
+  const len = (text || "").length;
+  console.log(`[EXAM][RAW][len=${len}] head=`, (text || "").slice(0, 600));
 
-  // quitar fences
-  text = text.replace(/```json\s*([\s\S]*?)```/gi, "$1").replace(/```\s*([\s\S]*?)```/g, "$1");
+  // 2) saneo básico
+  let t = stripCodeFences(text || "");
+  t = dropAfterLastBrace(t);
 
-  // normalizar comillas tipográficas
-  const smartMap = {
-    "\u201C": '"', "\u201D": '"', "\u201E": '"', "\u201F": '"',
-    "\u2018": "'", "\u2019": "'", "\u201A": "'", "\u201B": "'"
-  };
-  text = text.replace(/[\u201C\u201D\u201E\u201F\u2018\u2019\u201A\u201B]/g, m => smartMap[m] || m);
+  // 3) chequeo balanceo simple de llaves/corchetes
+  const openBraces = (t.match(/{/g) || []).length;
+  const closeBraces = (t.match(/}/g) || []).length;
+  const openBrackets = (t.match(/\[/g) || []).length;
+  const closeBrackets = (t.match(/]/g) || []).length;
 
-  // extraer PRIMER objeto balanceado {...}
-  const start = text.indexOf("{");
-  if (start === -1) throw new Error("AI_JSON_NOT_FOUND");
-  let depth = 0, end = -1, inStr = false, esc = false;
-  for (let i = start; i < text.length; i++) {
-    const ch = text[i];
-    if (inStr) {
-      if (!esc && ch === '"') inStr = false;
-      esc = ch === "\\" && !esc;
-    } else {
-      if (ch === '"') inStr = true;
-      else if (ch === "{") depth++;
-      else if (ch === "}") {
-        depth--;
-        if (depth === 0) { end = i; break; }
-      }
+  if (openBraces !== closeBraces || openBrackets !== closeBrackets) {
+    // último intento: cortar al último } y limpiar comas colgantes
+    t = removeTrailingCommas(dropAfterLastBrace(t));
+    const ob = (t.match(/{/g) || []).length;
+    const cb = (t.match(/}/g) || []).length;
+    const oB = (t.match(/\[/g) || []).length;
+    const cB = (t.match(/]/g) || []).length;
+    if (ob !== cb || oB !== cB) {
+      console.error("[EXAM][PARSE][UNBALANCED] counters:", {
+        openBraces, closeBraces, openBrackets, closeBrackets,
+        afterFix: { ob, cb, oB, cB }
+      });
+      throw new Error("AI_JSON_UNBALANCED");
     }
   }
-  if (end === -1) throw new Error("AI_JSON_UNBALANCED");
-  let candidate = text.slice(start, end + 1);
 
-  // limpiar comas colgantes
-  candidate = candidate.replace(/,\s*([}\]])/g, "$1");
-
-  return JSON.parse(candidate);
+  // 4) intento directo
+  try {
+    return JSON.parse(t);
+  } catch (e1) {
+    // 5) remover comas colgantes y reintentar
+    try {
+      const fixed = removeTrailingCommas(t);
+      return JSON.parse(fixed);
+    } catch (e2) {
+      console.error("[EXAM][PARSE][FAIL] sample:", (t || "").slice(0, 800));
+      throw new Error("AI_JSON_PARSE_ERROR");
+    }
+  }
 }
 
 /** Normaliza una pregunta: asegura keys A–D, arrays, y deriva answerKeys si faltan. */
@@ -187,78 +211,51 @@ function normalizeExamQuestion(q, idx) {
 
 export async function generateExam({ course }) {
   const sys = "Eres un generador de exámenes. Devuelve SOLO JSON válido.";
-  const user = `Genera un examen final de 8–10 preguntas multiopción (A–D) del curso.
-
-FORMATO ESTRICTO (sin texto fuera del JSON):
-{
-  "exam": {
-    "id": "ex_1",
-    "title": "Examen final",
-    "mode": "final",
-    "timeLimitMinutes": 0,
-    "questions": [
-      {
-        "id": "q1",
-        "position": 1,
-        "prompt": "string",
-        "options": [
-          { "key": "A", "label": "string", "isCorrect": false, "feedback": "string" },
-          { "key": "B", "label": "string", "isCorrect": false, "feedback": "string" },
-          { "key": "C", "label": "string", "isCorrect": true,  "feedback": "string" },
-          { "key": "D", "label": "string", "isCorrect": false, "feedback": "string" }
-        ],
-        "answerKeys": ["C"]
-      }
-    ],
-    "answerSheet": [
-      { "id": "q1", "answerKeys": ["C"] }
-    ]
+  const user = `Genera un examen final de 8–10 preguntas multiopción (A–D) relacionado al curso.
+  FORMATO ESTRICTO (sin texto fuera del JSON):
+  {
+    "exam": {
+      "id": "ex_1",
+      "title": "Examen final",
+      "mode": "final",
+      "timeLimitMinutes": 0,
+      "questions": [
+        {
+          "id": "q1",
+          "position": 1,
+          "prompt": "string",
+          "options": [
+            { "key": "A", "label": "string", "isCorrect": false, "feedback": "string" },
+            { "key": "B", "label": "string", "isCorrect": false, "feedback": "string" },
+            { "key": "C", "label": "string", "isCorrect": true,  "feedback": "string" },
+            { "key": "D", "label": "string", "isCorrect": false, "feedback": "string" }
+          ],
+          "answerKeys": ["C"]
+        }
+      ],
+      "answerSheet": [
+        { "id": "q1", "answerKeys": ["C"] }
+      ]
+    }
   }
-}
 
-Reglas:
-- Usa SOLO estas claves: id,title,mode,timeLimitMinutes,questions,position,prompt,options,key,label,isCorrect,feedback,answerKeys,answerSheet.
-- Escapa comillas internas correctamente.
-- Español neutro, temática del curso.
+  Reglas:
+  - Usa solo las claves: id,title,mode,timeLimitMinutes,questions,position,prompt,options,key,label,isCorrect,feedback,answerKeys,answerSheet.
+  - No incluyas ningún texto fuera del JSON.
+  - Escapa comillas internas correctamente.
+  - Español neutro, temática del curso.
 
-Contexto (recortado):
-${JSON.stringify(course).slice(0, 3500)}`;
+  Contexto (recortado):
+  ${JSON.stringify(course).slice(0, 3500)}`;
 
-  // Llamada igual (no se toca chatGemini)
   const text = await chatGemini(
     [{ role: "system", content: sys }, { role: "user", content: user }],
     { maxTokens: 2200 }
   );
 
-  // Parse robusto SOLO para exam
-  const parsed = safeJsonParseExam(text);
-
-  // Normalización mínima y construcción de answerSheet
-  const ex = parsed?.exam ?? {};
-  const questions = Array.isArray(ex?.questions) ? ex.questions : [];
-
-  const items = questions.map((q, i) => normalizeExamQuestion(q, i));
-
-  const answerSheet =
-    Array.isArray(ex?.answerSheet) && ex.answerSheet.length
-      ? ex.answerSheet.map(x => ({
-          id: String(x?.id ?? "").trim(),
-          answerKeys: Array.isArray(x?.answerKeys) ? x.answerKeys : []
-        }))
-      : items.map(q => ({ id: q.id, answerKeys: q.answerKeys }));
-
-  const out = {
-    exam: {
-      id: String(ex?.id ?? "ex_1"),
-      title: String(ex?.title ?? "Examen final"),
-      mode: String(ex?.mode ?? "final"),
-      timeLimitMinutes: Number(ex?.timeLimitMinutes ?? 0),
-      questions: items,
-      answerSheet
-    }
-  };
-
-  return out;
+  // Log del tamaño & cabeza del payload ya lo hace safeJsonParseExam
+  const json = safeJsonParseExam(text);
+  return json;
 }
 
 export async function generateResources({ course }) {
