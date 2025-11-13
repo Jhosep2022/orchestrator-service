@@ -28,11 +28,7 @@ export const handler = async (event) => {
   const requestId = event?.requestId || 'no-request-id';
 
   // Tablas desde env (permite fallback si definiste las vars directas)
-  const lessonsTable =
-    env.lessonsTable ||
-    process.env.LESSONS_TABLE_NAME ||
-    env.tableName || // si compartes una sola tabla wide
-    process.env.TABLE_NAME;
+  const lessonsTable = env.lessonsTable
 
   const { course, modules } = resolveOutline(event);
   const courseId =
@@ -67,6 +63,9 @@ export const handler = async (event) => {
     const lessonId = L.lessonId || L.id;            // algunas IAs usan "id", nosotros guardamos "lessonId"
     const order = Number(L.order ?? (idx + 1));
     const modulePos = Number(modulePosById.get(oldModuleId) || 0);
+    const summary = L.summary && String(L.summary).trim().length >= 60
+      ? String(L.summary).trim()
+      : shortSummaryFallback(L.contentMD || '');
 
     if (!realModuleId) {
       console.error('[LESSONS][ERR] Missing realModuleId', { requestId, oldModuleId, lessonId, title: L?.title });
@@ -98,7 +97,7 @@ export const handler = async (event) => {
       durationMinutes: Number(L.durationMinutes ?? 0) || null,
       contentMD: L.contentMD ?? '',
       contentUrl: L.contentUrl ?? '',
-      summary: L.summary ?? null,
+      summary,
       tips: Array.isArray(L.tips) ? L.tips : [],
       miniChallenge: L.miniChallenge ?? null,
 
