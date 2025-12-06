@@ -79,26 +79,79 @@ function safeJsonParseLessons(text, ctx = {}) {
 
   let t = preRepairLessonsJson(raw);
 
+  // Nos quedamos con el objeto externo principal
   t = sliceOuterObject(t);
 
+  // Helper para balancear llaves y corchetes y parsear
+  const balanceAndParse = (src) => {
+    let s = src;
+
+    const count = (str, re) => (str.match(re) || []).length;
+    let ob = count(s, /{/g);
+    let cb = count(s, /}/g);
+    let oB = count(s, /\[/g);
+    let cB = count(s, /]/g);
+
+    // Quitar coma colgante final si existe
+    s = s.replace(/,\s*$/g, "");
+    s = removeTrailingCommas(s);
+
+    // Completar cierres necesarios
+    ob = count(s, /{/g);
+    cb = count(s, /}/g);
+    oB = count(s, /\[/g);
+    cB = count(s, /]/g);
+
+    const needCloseBrackets = Math.max(0, oB - cB);
+    const needCloseBraces   = Math.max(0, ob - cb);
+
+    if (needCloseBrackets > 0 || needCloseBraces > 0) {
+      s = s + "]".repeat(needCloseBrackets) + "}".repeat(needCloseBraces);
+    }
+
+    return JSON.parse(s);
+  };
+
   try {
+    // Primer intento directo
     return JSON.parse(t);
   } catch (e1) {
     log(ctx, "error", "LESSONS_PARSE_FAIL_1", { msg: e1?.message });
 
+    // Segundo intento: cortar la ÚLTIMA propiedad contentMD (la que suele quedar truncada)
+    const marker = '"contentMD"';
+    const lastIdx = t.lastIndexOf(marker);
+    if (lastIdx !== -1) {
+      // Buscamos la coma que viene justo antes de "contentMD"
+      const commaIdx = t.lastIndexOf(",", lastIdx);
+      const cutIdx = commaIdx !== -1 ? commaIdx : lastIdx;
+
+      let trimmed = t.slice(0, cutIdx);
+      try {
+        const json = balanceAndParse(trimmed);
+        return json;
+      } catch (e2) {
+        log(ctx, "error", "LESSONS_PARSE_FAIL_2", { msg: e2?.message, head: head(trimmed, 800) });
+      }
+    }
+
+    // Tercer intento: recortar hasta el último '}' y balancear
     const lastBrace = t.lastIndexOf("}");
     if (lastBrace > 0) {
       const sliced = t.slice(0, lastBrace + 1);
       try {
-        return JSON.parse(sliced);
-      } catch (e2) {
-        log(ctx, "error", "LESSONS_PARSE_FAIL_2", { msg: e2?.message, head: head(sliced, 800) });
+        const json = balanceAndParse(sliced);
+        return json;
+      } catch (e3) {
+        log(ctx, "error", "LESSONS_PARSE_FAIL_3", { msg: e3?.message, head: head(sliced, 800) });
       }
     }
 
+    // Si nada funcionó, ya no hay mucho que salvar
     throw new Error("AI_JSON_PARSE_ERROR");
   }
 }
+
 
 function preRepairLessonsJson(s = "") {
   let t = String(s ?? "");
