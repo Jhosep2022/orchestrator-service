@@ -33,7 +33,7 @@ function flattenMessages(messages) {
   return { sys, user };
 }
 
-async function chatGemini(messages, { maxTokens = 2200 } = {}) {
+async function chatGemini(messages, { maxTokens = 10000 } = {}) {
   if (!env.googleApiKey) throw new Error("Missing GOOGLE_API_KEY");
   const genAI = new GoogleGenerativeAI(env.googleApiKey);
   const { sys, user } = flattenMessages(messages);
@@ -73,7 +73,7 @@ export async function generateOutline({ topic, level = "beginner", tags = [] }) 
   const user = `Tema: ${topic}\nNivel: ${level}\nEtiquetas: ${tags.join(", ")}\n\nEstructura JSON:\n{\n  "course": { "id": "c_<algo>", "title": "<titulo>", "level": "<beginner|intermediate|advanced>", "tags": [] },\n  "modules": [\n    { "id": "m_1", "title": "...", "lessons": [ { "id": "l_1", "title": "...", "durationMinutes": 10 } ] }\n  ]\n}`;
   const text = await chatGemini(
     [{ role: "system", content: sys }, { role: "user", content: user }],
-    { maxTokens: 1500 }
+    { maxTokens: 2000 }
   );
   return JSON.parse(text);
 }
@@ -140,7 +140,7 @@ ${JSON.stringify(course).slice(0, 6000)}
 
   const text = await chatGemini(
     [{ role: "system", content: sys }, { role: "user", content: user }],
-    { maxTokens: 3000 }
+    { maxTokens: 8000 }
   );
 
   console.log("[AI][LESSONS][RAW]", text.slice(0, 600));
