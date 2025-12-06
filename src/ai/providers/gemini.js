@@ -85,7 +85,7 @@ export async function generateLessons({ course }) {
   - title (mejorado si viene genérico)
   - durationMinutes (8–15 según título)
   - summary (2–3 oraciones; 140–300 caracteres; sin saltos de línea; NO placeholders)
-  - contentMD (Markdown con secciones: Objetivos, Conceptos clave, Ejemplo con \`\`\`, Mini-ejercicio)
+  - contentMD (Markdown con secciones: introduccion explicando un poco, Conceptos clave, Ejemplo con \`\`\`, Mini-ejercicio)
   - tips (2–4 bullets)
   - miniChallenge (1–2 líneas)
 
@@ -101,35 +101,32 @@ export async function generateLessons({ course }) {
     [{ role: "system", content: sys }, { role: "user", content: user }],
     { maxTokens: 3000 }
   );
-  try { return JSON.parse(text); } catch { throw new Error("AI_JSON_PARSE_ERROR"); }
-}
-/* ========== /NO TOCAR ========== */
 
-/* =========================
-   PARSER para EXAM (robusto)
-   ========================= */
+  console.log("[AI][LESSONS][RAW]", text.slice(0, 600));
+
+  try { return JSON.parse(text); }  catch (e) {
+    console.error("[AI][LESSONS][PARSE_ERROR]", e?.message, {
+      head: text.slice(0, 400),
+      tail: text.slice(-400),
+    });
+    throw new Error("AI_JSON_PARSE_ERROR");
+  }
+}
 
 /** Correcciones sintácticas comunes ANTES del conteo/parseo. */
 function preRepairExamJson(s = "") {
   let t = String(s ?? "");
-
-  // 1) Normalizar comillas “inteligentes” a ASCII
   t = t.replace(/[“”]/g, '"').replace(/[‘’]/g, "'");
-
-  // 2a) Fix específico de claves comunes: "label" "Valor" -> "label": "Valor"
   t = t.replace(
     /("label"|"title"|"prompt"|"feedback"|"slug"|"description"|"overview"|"actionLabel"|"actionUrl"|"key")\s+("([^"\\]|\\.)*")/g,
     '$1: $2'
   );
 
-  // 2b) Fix GENÉRICO: cualquier "clave" "valor" -> "clave": "valor"
-  //    (permite saltos de línea entre clave y valor)
   t = t.replace(
     /"([A-Za-z0-9_]+)"\s+("([^"\\]|\\.)*")/g,
     '"$1": $2'
   );
 
-  // 3) Invisibles y comas colgantes
   t = removeInvisible(t);
   t = removeTrailingCommas(t);
 
@@ -140,23 +137,18 @@ function safeJsonParseExam(text, ctx = {}) {
   const raw = String(text ?? "");
   log(ctx, "log", "EXAM_RAW", { len: raw.length, head: head(raw), tail: tail(raw) });
 
-  // Pre-repair global
   let t = preRepairExamJson(stripFences(raw));
 
-  // Aislar el objeto exterior probable
   t = sliceOuterObject(t);
 
-  // Balance check
   const count = (str, re) => (str.match(re) || []).length;
   let ob = count(t, /{/g), cb = count(t, /}/g), oB = count(t, /\[/g), cB = count(t, /]/g);
 
-  // Reintento 1: limpiar y recontar
   if (ob !== cb || oB !== cB) {
     t = removeTrailingCommas(sliceOuterObject(t));
     ob = count(t, /{/g); cb = count(t, /}/g); oB = count(t, /\[/g); cB = count(t, /]/g);
   }
 
-  // Reintento 2: extraer bloque "exam" con questions[] si existe
   if (ob !== cb || oB !== cB) {
     const reExamBlock = /\{\s*"exam"\s*:\s*\{\s*[\s\S]*?"questions"\s*:\s*\[[\s\S]*?\][\s\S]*?\}\s*\}/i;
     const m = raw.match(reExamBlock);
@@ -167,7 +159,6 @@ function safeJsonParseExam(text, ctx = {}) {
     }
   }
 
-  // Reintento 3: cerrar ] y } que falten (posible truncado final)
   if (ob !== cb || oB !== cB) {
     t = t.replace(/,\s*$/g, "");
     const needCloseBrackets = Math.max(0, oB - cB);
@@ -183,7 +174,6 @@ function safeJsonParseExam(text, ctx = {}) {
     throw new Error("AI_JSON_UNBALANCED");
   }
 
-  // Parse directo y reintento tras reparar
   try {
     return JSON.parse(t);
   } catch {
@@ -212,9 +202,6 @@ function normalizeExamQuestion(q, idx) {
   return { id: String(q?.id ?? `q${idx + 1}`), position: pos, prompt, options, answerKeys };
 }
 
-/* =========================
-   Generación de EXAM
-   ========================= */
 export async function generateExam({ course, ctx = {} }) {
   const sys = "Eres un generador de exámenes. Devuelve SOLO JSON válido.";
   const user = `Genera un examen final de 6 preguntas multiopción (A–C) relacionado al curso.
@@ -260,17 +247,14 @@ export async function generateExam({ course, ctx = {} }) {
   return json;
 }
 
-/* =========================
-   Generación de Recursos (igual)
-   ========================= */
 export async function generateResources({ course }) {
   const sys = "Eres un generador de recursos complementarios. que busca referencias en la web. Devuelve SOLO JSON válido.";
-  const user = `Genera recursos variados (article|practice|video|cheatsheet) para el curso tienes que buscarlo en la web no quiero inventados.
+  const user = `Genera recursos variados (article|practice|cheatsheet) para el curso tienes que buscarlo en la web no quiero inventados.
 DEVUELVE ESTE FORMATO ESTRICTO (sin comentarios, sin claves extra, sin fences):
 {
   "resources": {
     "items": [
-      { "slug":"kebab-case-unico","title":"string","resourceType":"article|practice|video|cheatsheet","durationMinutes":5,"description":"string","overview":"string|null","actionLabel":"string","actionUrl":"https://...|null","tags":["..."],"lessonId":"l_1|null" }
+      { "slug":"kebab-case-unico","title":"string","resourceType":"article|practice|cheatsheet","durationMinutes":5,"description":"string","overview":"string|null","actionLabel":"string","actionUrl":"https://...|null","tags":["..."],"lessonId":"l_1|null" }
     ]
   }
 }
