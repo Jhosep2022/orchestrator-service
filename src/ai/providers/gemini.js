@@ -33,7 +33,10 @@ function flattenMessages(messages) {
   return { sys, user };
 }
 
-async function chatGemini(messages, { maxTokens = 2800, timeoutMs = 18000 } = {}) {
+async function chatGemini(
+  messages,
+  { maxTokens = 2800, timeoutMs = 18000, mimeType = "application/json" } = {}
+) {
   if (!env.googleApiKey) throw new Error("Missing GOOGLE_API_KEY");
   const genAI = new GoogleGenerativeAI(env.googleApiKey);
   const { sys, user } = flattenMessages(messages);
@@ -43,7 +46,7 @@ async function chatGemini(messages, { maxTokens = 2800, timeoutMs = 18000 } = {}
     ...(sys ? { systemInstruction: sys } : {}),
     generationConfig: {
       maxOutputTokens: maxTokens,
-      responseMimeType: "application/json",
+      responseMimeType: mimeType,
     },
   });
 
@@ -189,78 +192,84 @@ export async function generateOutline({ topic, level = "beginner", tags = [] }) 
 export async function generateLessons({ course }) {
   const sys = `
 Eres un generador de contenido de lecciones para un e-learning de PROGRAMACIÓN.
-Debes devolver SIEMPRE JSON válido, sin comentarios y sin texto fuera del JSON.
+Devuelves SOLO texto plano (no JSON).
 `.trim();
 
+  // Le pasamos a la IA las lecciones base
+  const lessonsInfo = (course.lessons || []).map(l => ({
+    id: l.id,
+    moduleId: l.moduleId,
+    title: l.title,
+  }));
+
   const user = `
-Genera para CADA lección en course.lessons un objeto con:
+Tienes las siguientes lecciones:
 
-- id, moduleId, order (igual que los de entrada)
-- title (mejorado si viene muy genérico)
-- durationMinutes (entre 8 y 15 según el título)
-- summary (1 párrafo, 2–3 oraciones, máximo 220 caracteres)
-- contentMD con SOLO estas secciones, en este ORDEN exacto:
+${lessonsInfo.map(l => `- id=${l.id}, moduleId=${l.moduleId}, title="${l.title}"`).join("\n")}
 
-  1) "# <título de la lección>"
-  2) "## Introducción" → 1 párrafo corto (2–3 oraciones, máximo 350 caracteres)
-  3) "## Conceptos clave" → lista de 3 a 5 viñetas ("- ...")
-  4) "## Ejemplo" → un bloque de código \`\`\`<lenguaje>\`\`\` usando el lenguaje principal detectado
+Para CADA lección genera un bloque de Markdown con el siguiente formato EXACTO:
 
-- tips → array de 2 a 4 strings cortos (consejos prácticos)
-- miniChallenge → 1 sola línea con un reto un poco más avanzado
+=== LESSON <id> START ===
+# <título de la lección>
+## Introducción
+<1 párrafo corto explicando el tema, 2–3 oraciones>
+## Conceptos clave
+- punto 1
+- punto 2
+- punto 3
+## Ejemplo
+\`\`\`<lenguaje>
+<ejemplo de código corto (máx. 10–12 líneas, usando solo comillas simples en los strings)>
+\`\`\`
+## Mini-ejercicio
+- actividad breve 1
+- actividad breve 2
+=== LESSON <id> END ===
 
-REGLAS IMPORTANTES:
-- JSON puro, sin comentarios, sin fences adicionales y sin texto fuera del JSON.
-- Usa SIEMPRE un único lenguaje de programación por curso.
-- Detecta el lenguaje principal a partir de course.title, course.tags o course.description
-  (por ejemplo Java, Python, JavaScript, etc.).
-- Si el título o tags contienen "Java", TODO el código de ejemplo debe ser Java.
-- El bloque de código debe:
-  - Tener como máximo 12 líneas.
-  - Usar solo comillas simples '...'.
-  - No incluir comentarios con comillas ni texto raro que rompa el JSON.
+REGLAS:
+- Usa SIEMPRE un único lenguaje principal para TODO el curso (Java, Python, JavaScript, etc.).
+- Detecta el lenguaje a partir de course.title, course.tags o course.description.
+- No devuelvas nada fuera de esos bloques.
+- No devuelvas JSON, solo texto plano con los bloques anteriores.
 
-FORMATO EXACTO DE SALIDA (sin claves extra):
-{
-  "lessons": {
-    "items": [
-      {
-        "id": "l_1",
-        "moduleId": "m_1",
-        "title": "string",
-        "durationMinutes": 12,
-        "order": 1,
-        "summary": "string",
-        "contentMD": "string con Markdown",
-        "tips": ["string", "string"],
-        "miniChallenge": "string"
-      }
-    ]
-  }
-}
-
-INPUT (course recortado):
-${JSON.stringify(course).slice(0, 6000)}
+course (recortado):
+${JSON.stringify(course).slice(0, 4000)}
 `.trim();
 
   const text = await chatGemini(
     [{ role: "system", content: sys }, { role: "user", content: user }],
-    { maxTokens: 2200 } // un poco menos para evitar cortes
+    { maxTokens: 2600, mimeType: "text/plain" }
   );
 
   console.log("[AI][LESSONS][RAW]", text.slice(0, 600));
 
-  try {
-    const json = safeJsonParseLessons(text, { scope: "lessons" });
-    return json;
-  } catch (e) {
-    console.error("[AI][LESSONS][PARSE_ERROR]", e?.message, {
-      head: text.slice(0, 400),
-      tail: text.slice(-400),
-    });
-    throw new Error("AI_JSON_PARSE_ERROR");
+  // Parsear bloques: === LESSON <id> START === ... === LESSON <id> END ===
+  const blocksById = {};
+  const re = /=== LESSON ([^=\n]+) START ===([\s\S]*?)=== LESSON \1 END ===/g;
+  let match;
+  while ((match = re.exec(text)) !== null) {
+    const id = String(match[1]).trim();
+    const body = String(match[2] || "").trim();
+    blocksById[id] = body;
   }
+
+  // Construimos JSON nosotros mismos
+  const items = (course.lessons || []).map((l, idx) => ({
+    id: l.id,
+    moduleId: l.moduleId,
+    title: l.title || `Lección ${idx + 1}`,
+    durationMinutes: Number(l.durationMinutes ?? 10),
+    order: Number(l.order ?? idx + 1),
+    // Solo ponemos contentMD. summary/tips/miniChallenge los completa ensureLessonFilled
+    contentMD: blocksById[l.id] || "",
+    summary: null,
+    tips: [],
+    miniChallenge: null,
+  }));
+
+  return { lessons: { items } };
 }
+
 
 
 /** Correcciones sintácticas comunes ANTES del conteo/parseo. */
