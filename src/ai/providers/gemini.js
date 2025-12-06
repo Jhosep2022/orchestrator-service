@@ -73,6 +73,55 @@ function sliceOuterObject(s = "") {
   return s.slice(a, b + 1);
 }
 
+function safeJsonParseLessons(text, ctx = {}) {
+  const raw = String(text ?? "");
+  log(ctx, "log", "LESSONS_RAW_JSON", { len: raw.length, head: head(raw), tail: tail(raw) });
+
+  let t = preRepairLessonsJson(raw);
+
+  t = sliceOuterObject(t);
+
+  try {
+    return JSON.parse(t);
+  } catch (e1) {
+    log(ctx, "error", "LESSONS_PARSE_FAIL_1", { msg: e1?.message });
+
+    const lastBrace = t.lastIndexOf("}");
+    if (lastBrace > 0) {
+      const sliced = t.slice(0, lastBrace + 1);
+      try {
+        return JSON.parse(sliced);
+      } catch (e2) {
+        log(ctx, "error", "LESSONS_PARSE_FAIL_2", { msg: e2?.message, head: head(sliced, 800) });
+      }
+    }
+
+    throw new Error("AI_JSON_PARSE_ERROR");
+  }
+}
+
+function preRepairLessonsJson(s = "") {
+  let t = String(s ?? "");
+
+  t = t.replace(/[“”]/g, '"').replace(/[‘’]/g, "'");
+  t = removeInvisible(t);
+  t = stripFences(t);
+
+  const stringKeys = ["summary", "contentMD", "miniChallenge", "title"];
+  for (const key of stringKeys) {
+    const re = new RegExp(`"${key}"\\s*:\\s*"(.*?)"`, "gs");
+    t = t.replace(re, (_m, inner) => {
+      const safeInner = inner.replace(/"/g, "'");
+      return `"${key}":"${safeInner}"`;
+    });
+  }
+
+  t = removeTrailingCommas(t);
+
+  return t;
+}
+
+
 /* ========== NO TOCAR ========== */
 export async function generateOutline({ topic, level = "beginner", tags = [] }) {
   const sys = "Eres un generador de planes de curso. Devuelve SOLO JSON válido.";
@@ -152,7 +201,7 @@ ${JSON.stringify(course).slice(0, 6000)}
   console.log("[AI][LESSONS][RAW]", text.slice(0, 600));
 
   try {
-    const json = JSON.parse(text);
+    const json = safeJsonParseLessons(text, { scope: "lessons" });
     return json;
   } catch (e) {
     console.error("[AI][LESSONS][PARSE_ERROR]", e?.message, {
