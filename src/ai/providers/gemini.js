@@ -33,7 +33,7 @@ function flattenMessages(messages) {
   return { sys, user };
 }
 
-async function chatGemini(messages, { maxTokens = 10000 } = {}) {
+async function chatGemini(messages, { maxTokens = 2800, timeoutMs = 18000 } = {}) {
   if (!env.googleApiKey) throw new Error("Missing GOOGLE_API_KEY");
   const genAI = new GoogleGenerativeAI(env.googleApiKey);
   const { sys, user } = flattenMessages(messages);
@@ -47,10 +47,16 @@ async function chatGemini(messages, { maxTokens = 10000 } = {}) {
     },
   });
 
-  const r = await model.generateContent(user || "");
+  const task = model.generateContent(user || "");
+  const timeout = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error("AI_TIMEOUT")), timeoutMs)
+  );
+
+  const r = await Promise.race([task, timeout]);
   const text = r?.response?.text?.() ?? "";
   return text;
 }
+
 
 function removeTrailingCommas(s = "") { return s.replace(/,\s*([}\]])/g, "$1"); }
 function stripFences(s = "") {
@@ -140,7 +146,7 @@ ${JSON.stringify(course).slice(0, 6000)}
 
   const text = await chatGemini(
     [{ role: "system", content: sys }, { role: "user", content: user }],
-    { maxTokens: 8000 }
+    { maxTokens: 2800 }
   );
 
   console.log("[AI][LESSONS][RAW]", text.slice(0, 600));
