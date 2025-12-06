@@ -79,23 +79,64 @@ export async function generateOutline({ topic, level = "beginner", tags = [] }) 
 }
 
 export async function generateLessons({ course }) {
-  const sys = "Eres un generador de contenido de lecciones para un e-learning de PROGRAMACIÓN. Devuelve SOLO JSON válido (sin fences).";
-  const user = `Genera para CADA lección en course.lessons un objeto con:
-  - id, moduleId, order (idénticos a entrada)
-  - title (mejorado si viene genérico)
-  - durationMinutes (8–15 según título)
-  - summary (2–3 oraciones; 140–300 caracteres; sin saltos de línea; NO placeholders)
-  - contentMD (Markdown con secciones: introduccion explicando un poco, Conceptos clave, Ejemplo con \`\`\`, Mini-ejercicio)
-  - tips (2–4 bullets)
-  - miniChallenge (1–2 líneas)
+  const sys = `
+Eres un generador de contenido de lecciones para un e-learning de PROGRAMACIÓN.
+Tu trabajo es generar SOLO contenido educativo, nunca datos inventados de usuarios ni cosas fuera de programación.
+Devuelves SIEMPRE JSON válido, sin fences (\`\`\`) y sin comentarios.
 
-  JSON puro, sin comentarios ni fences.
+Antes de generar:
+- Identifica el LENGUAJE PRINCIPAL del curso (por ejemplo Java, Kotlin, Python, JavaScript)
+  a partir de course.title, course.tags, course.description o prompt.
+- Usa SIEMPRE ese mismo lenguaje en TODOS los ejemplos de código y en las explicaciones.
+- No mezcles lenguajes: si detectas "Java" en el título o tags, TODO el código debe ser Java.
+- NO uses Kotlin a menos que el curso sea explícitamente de Kotlin.
+- Usa bloques de código Markdown con el nombre correcto del lenguaje: \`\`\`java, \`\`\`python, etc.
+`.trim();
 
-  SALIDA EXACTA:
-  { "lessons": { "items": [ { "id":"l_1","moduleId":"m_1","title":"...","durationMinutes":12,"order":1,"summary":"...","contentMD":"...","tips":["..."],"miniChallenge":"..." } ] } }
+  const user = `
+Genera para CADA lección en course.lessons un objeto con:
+- id, moduleId, order (idénticos a entrada)
+- title (mejorado si viene genérico)
+- durationMinutes (8–15 según título)
+- summary (2–3 oraciones; 140–300 caracteres; sin saltos de línea; NO placeholders)
+- contentMD (Markdown con secciones en este orden exacto:
+    1) "# <título de la lección>"
+    2) "## Introducción" explicando el tema con 1–2 párrafos
+    3) "## Conceptos clave" con viñetas
+    4) "## Ejemplo" con un bloque de código \`\`\`<lenguaje>\`\`\` usando el lenguaje principal detectado
+    5) "## Mini-ejercicio" con 1–3 viñetas de actividades
+  )
+- tips (2–4 bullets con consejos prácticos)
+- miniChallenge (1–2 líneas con un reto un poco más avanzado)
 
-  INPUT (recortado):
-  ${JSON.stringify(course).slice(0, 6000)}`;
+REGLAS:
+- JSON puro, sin comentarios, sin texto fuera del JSON, sin fences.
+- Usa un único lenguaje consistente en todo el curso, detectado a partir de los metadatos.
+- Si el título o tags contienen "Java", asume que el lenguaje principal es Java.
+- No menciones otros lenguajes en el texto (no digas "en Kotlin" si el curso es de Java).
+
+SALIDA EXACTA:
+{
+  "lessons": {
+    "items": [
+      {
+        "id": "l_1",
+        "moduleId": "m_1",
+        "title": "...",
+        "durationMinutes": 12,
+        "order": 1,
+        "summary": "...",
+        "contentMD": "...",
+        "tips": ["..."],
+        "miniChallenge": "..."
+      }
+    ]
+  }
+}
+
+INPUT (course recortado):
+${JSON.stringify(course).slice(0, 6000)}
+`.trim();
 
   const text = await chatGemini(
     [{ role: "system", content: sys }, { role: "user", content: user }],
@@ -104,7 +145,10 @@ export async function generateLessons({ course }) {
 
   console.log("[AI][LESSONS][RAW]", text.slice(0, 600));
 
-  try { return JSON.parse(text); }  catch (e) {
+  try {
+    const json = JSON.parse(text);
+    return json;
+  } catch (e) {
     console.error("[AI][LESSONS][PARSE_ERROR]", e?.message, {
       head: text.slice(0, 400),
       tail: text.slice(-400),
@@ -112,6 +156,7 @@ export async function generateLessons({ course }) {
     throw new Error("AI_JSON_PARSE_ERROR");
   }
 }
+
 
 /** Correcciones sintácticas comunes ANTES del conteo/parseo. */
 function preRepairExamJson(s = "") {
