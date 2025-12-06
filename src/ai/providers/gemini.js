@@ -189,54 +189,51 @@ export async function generateOutline({ topic, level = "beginner", tags = [] }) 
 export async function generateLessons({ course }) {
   const sys = `
 Eres un generador de contenido de lecciones para un e-learning de PROGRAMACIÓN.
-Tu trabajo es generar SOLO contenido educativo, nunca datos inventados de usuarios ni cosas fuera de programación.
-Devuelves SIEMPRE JSON válido, sin fences (\`\`\`) y sin comentarios.
-
-Antes de generar:
-- Identifica el LENGUAJE PRINCIPAL del curso (por ejemplo Java, Kotlin, Python, JavaScript)
-  a partir de course.title, course.tags, course.description o prompt.
-- Usa SIEMPRE ese mismo lenguaje en TODOS los ejemplos de código y en las explicaciones.
-- No mezcles lenguajes: si detectas "Java" en el título o tags, TODO el código debe ser Java.
-- NO uses Kotlin a menos que el curso sea explícitamente de Kotlin.
-- Usa bloques de código Markdown con el nombre correcto del lenguaje: \`\`\`java, \`\`\`python, etc.
+Debes devolver SIEMPRE JSON válido, sin comentarios y sin texto fuera del JSON.
 `.trim();
 
   const user = `
 Genera para CADA lección en course.lessons un objeto con:
-- id, moduleId, order (idénticos a entrada)
-- title (mejorado si viene genérico)
-- durationMinutes (8–15 según título)
-- summary (2–3 oraciones; 140–300 caracteres; sin saltos de línea; NO placeholders)
-- contentMD (Markdown con secciones en este orden exacto:
-    1) "# <título de la lección>"
-    2) "## Introducción" explicando el tema con 1–2 párrafos
-    3) "## Conceptos clave" con viñetas
-    4) "## Ejemplo" con un bloque de código \`\`\`<lenguaje>\`\`\` usando el lenguaje principal detectado
-    5) "## Mini-ejercicio" con 1–3 viñetas de actividades
-  )
-- tips (2–4 bullets con consejos prácticos)
-- miniChallenge (1–2 líneas con un reto un poco más avanzado)
 
-REGLAS:
-- JSON puro, sin comentarios, sin texto fuera del JSON, sin fences.
-- Usa un único lenguaje consistente en todo el curso, detectado a partir de los metadatos.
-- Si el título o tags contienen "Java", asume que el lenguaje principal es Java.
-- No menciones otros lenguajes en el texto (no digas "en Kotlin" si el curso es de Java).
+- id, moduleId, order (igual que los de entrada)
+- title (mejorado si viene muy genérico)
+- durationMinutes (entre 8 y 15 según el título)
+- summary (1 párrafo, 2–3 oraciones, máximo 220 caracteres)
+- contentMD con SOLO estas secciones, en este ORDEN exacto:
 
-SALIDA EXACTA:
+  1) "# <título de la lección>"
+  2) "## Introducción" → 1 párrafo corto (2–3 oraciones, máximo 350 caracteres)
+  3) "## Conceptos clave" → lista de 3 a 5 viñetas ("- ...")
+  4) "## Ejemplo" → un bloque de código \`\`\`<lenguaje>\`\`\` usando el lenguaje principal detectado
+
+- tips → array de 2 a 4 strings cortos (consejos prácticos)
+- miniChallenge → 1 sola línea con un reto un poco más avanzado
+
+REGLAS IMPORTANTES:
+- JSON puro, sin comentarios, sin fences adicionales y sin texto fuera del JSON.
+- Usa SIEMPRE un único lenguaje de programación por curso.
+- Detecta el lenguaje principal a partir de course.title, course.tags o course.description
+  (por ejemplo Java, Python, JavaScript, etc.).
+- Si el título o tags contienen "Java", TODO el código de ejemplo debe ser Java.
+- El bloque de código debe:
+  - Tener como máximo 12 líneas.
+  - Usar solo comillas simples '...'.
+  - No incluir comentarios con comillas ni texto raro que rompa el JSON.
+
+FORMATO EXACTO DE SALIDA (sin claves extra):
 {
   "lessons": {
     "items": [
       {
         "id": "l_1",
         "moduleId": "m_1",
-        "title": "...",
+        "title": "string",
         "durationMinutes": 12,
         "order": 1,
-        "summary": "...",
-        "contentMD": "...",
-        "tips": ["..."],
-        "miniChallenge": "..."
+        "summary": "string",
+        "contentMD": "string con Markdown",
+        "tips": ["string", "string"],
+        "miniChallenge": "string"
       }
     ]
   }
@@ -248,7 +245,7 @@ ${JSON.stringify(course).slice(0, 6000)}
 
   const text = await chatGemini(
     [{ role: "system", content: sys }, { role: "user", content: user }],
-    { maxTokens: 2800 }
+    { maxTokens: 2200 } // un poco menos para evitar cortes
   );
 
   console.log("[AI][LESSONS][RAW]", text.slice(0, 600));
