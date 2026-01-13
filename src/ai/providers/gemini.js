@@ -180,8 +180,13 @@ function preRepairLessonsJson(s = "") {
 
 /* ========== NO TOCAR ========== */
 export async function generateOutline({ topic, level = "beginner", tags = [] }) {
-  const sys = "Eres un generador de planes de curso. Devuelve SOLO JSON válido.";
-  const user = `Tema: ${topic}\nNivel: ${level}\nEtiquetas: ${tags.join(", ")}\n\nEstructura JSON:\n{\n  "course": { "id": "c_<algo>", "title": "<titulo>", "level": "<beginner|intermediate|advanced>", "tags": [] },\n  "modules": [\n    { "id": "m_1", "title": "...", "lessons": [ { "id": "l_1", "title": "...", "durationMinutes": 10 } ] }\n  ]\n}`;
+  const sys =
+    "Eres un experto en DISENO de planes de curso de programacion. " +
+    "Tu especialidad es crear esquemas claros y coherentes segun el nivel solicitado. " +
+    "Devuelves SOLO JSON valido.";
+  const user = `Tema: ${topic}\nNivel: ${level} (respeta estrictamente este nivel)\nEtiquetas: ${tags.join(
+    ", "
+  )}\n\nEstructura JSON:\n{\n  "course": { "id": "c_<algo>", "title": "<titulo>", "level": "<beginner|intermediate|advanced>", "tags": [] },\n  "modules": [\n    { "id": "m_1", "title": "...", "lessons": [ { "id": "l_1", "title": "...", "durationMinutes": 10 } ] }\n  ]\n}`;
   const text = await chatGemini(
     [{ role: "system", content: sys }, { role: "user", content: user }],
     { maxTokens: 2000 }
